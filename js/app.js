@@ -471,6 +471,38 @@ worker.onerror = (e) => {
 worker.postMessage({ type: 'init' });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  資料夾遞迴讀取（FileSystemEntry API）
+// ═══════════════════════════════════════════════════════════════════════════════
+async function readDropItems(dataTransferItems, extensions) {
+  const extSet  = new Set(extensions.map(e => e.toUpperCase()));
+  const results = [];
+
+  async function processEntry(entry) {
+    if (entry.isFile) {
+      const ext = entry.name.split('.').pop().toUpperCase();
+      if (extSet.has(ext)) {
+        const file = await new Promise((res, rej) => entry.file(res, rej));
+        results.push(file);
+      }
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      // readEntries 最多一次 100 筆，需迴圈直到空
+      let batch;
+      do {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        for (const child of batch) await processEntry(child);
+      } while (batch.length > 0);
+    }
+  }
+
+  for (const item of dataTransferItems) {
+    const entry = item.webkitGetAsEntry?.();
+    if (entry) await processEntry(entry);
+  }
+  return results;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  FIT MODULE
 // ═══════════════════════════════════════════════════════════════════════════════
 const FIT_EXTS = ['D14', 'D2C', 'D2D', 'D2B'];
@@ -483,9 +515,10 @@ let _fitDragDepth = 0;
 dropZone.addEventListener('dragenter', e => { e.preventDefault(); _fitDragDepth++; dropZone.classList.add('over'); });
 dropZone.addEventListener('dragover',  e => { e.preventDefault(); });
 dropZone.addEventListener('dragleave', () => { if (--_fitDragDepth <= 0) { _fitDragDepth = 0; dropZone.classList.remove('over'); } });
-dropZone.addEventListener('drop', e => {
+dropZone.addEventListener('drop', async e => {
   e.preventDefault(); _fitDragDepth = 0; dropZone.classList.remove('over');
-  handleFitFiles([...e.dataTransfer.files]);
+  const files = await readDropItems([...e.dataTransfer.items], FIT_EXTS);
+  handleFitFiles(files.length ? files : [...e.dataTransfer.files]);
 });
 
 function handleFitFiles(files) {
@@ -627,9 +660,10 @@ let _adjDragDepth = 0;
 adjDropZone.addEventListener('dragenter', e => { e.preventDefault(); _adjDragDepth++; adjDropZone.classList.add('over'); });
 adjDropZone.addEventListener('dragover',  e => { e.preventDefault(); });
 adjDropZone.addEventListener('dragleave', () => { if (--_adjDragDepth <= 0) { _adjDragDepth = 0; adjDropZone.classList.remove('over'); } });
-adjDropZone.addEventListener('drop', e => {
+adjDropZone.addEventListener('drop', async e => {
   e.preventDefault(); _adjDragDepth = 0; adjDropZone.classList.remove('over');
-  handleAdjFiles([...e.dataTransfer.files]);
+  const files = await readDropItems([...e.dataTransfer.items], ADJ_EXTS);
+  handleAdjFiles(files.length ? files : [...e.dataTransfer.files]);
 });
 
 function handleAdjFiles(files) {
