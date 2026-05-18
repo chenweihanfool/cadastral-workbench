@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-TW" x-data="app()" x-init="init()">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CadastralWorkbench</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet-Geoman -->
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css" />
+  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+
+  <style>
+    [x-cloak] { display: none !important; }
+    #map { height: 100%; min-height: 400px; }
+    .tab-active { @apply bg-blue-700 text-white; }
+    .tab-inactive { @apply bg-gray-200 text-gray-700 hover:bg-gray-300; }
+  </style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col overflow-hidden">
+
+  <!-- Navbar -->
+  <header class="bg-blue-800 text-white px-4 py-2 flex items-center gap-4 shrink-0">
+    <span class="font-bold text-lg tracking-wide">⚡ CadastralWorkbench</span>
+    <nav class="flex gap-2 ml-4">
+      <button
+        @click="activeModule = 'fit'"
+        :class="activeModule === 'fit' ? 'tab-active' : 'tab-inactive'"
+        class="px-3 py-1 rounded text-sm font-medium transition">
+        📐 套圖模組
+      </button>
+      <button
+        @click="activeModule = 'adjust'"
+        :class="activeModule === 'adjust' ? 'tab-active' : 'tab-inactive'"
+        class="px-3 py-1 rounded text-sm font-medium transition">
+        📏 調整模組
+      </button>
+    </nav>
+    <div class="ml-auto flex items-center gap-3">
+      <button @click="showSettings = !showSettings" class="text-sm bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded">
+        ⚙ 設定
+      </button>
+      <span class="text-xs text-blue-300">v0.1.0</span>
+    </div>
+  </header>
+
+  <!-- Settings Panel (overlay) -->
+  <div x-show="showSettings" x-cloak @click.away="showSettings = false"
+       class="absolute top-12 right-4 z-50 bg-white shadow-xl rounded-lg p-4 w-80 border">
+    <h3 class="font-bold mb-3 text-gray-700">設定</h3>
+    <label class="block text-sm text-gray-600 mb-1">AI API Key (OpenAI / Gemini)</label>
+    <input type="password" x-model="settings.apiKey" @change="saveSettings()"
+           class="w-full border rounded px-2 py-1 text-sm mb-2" placeholder="sk-..." />
+    <label class="block text-sm text-gray-600 mb-1">AI 提供者</label>
+    <select x-model="settings.aiProvider" @change="saveSettings()" class="w-full border rounded px-2 py-1 text-sm mb-3">
+      <option value="openai">OpenAI (gpt-4o)</option>
+      <option value="gemini">Gemini 1.5 Flash</option>
+    </select>
+    <div class="text-xs text-gray-400">API Key 僅存於本機 localStorage，不上傳任何伺服器。</div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="flex flex-1 overflow-hidden">
+
+    <!-- Left Panel -->
+    <aside class="w-80 bg-white border-r flex flex-col overflow-y-auto shrink-0 p-4 gap-4">
+
+      <!-- FIT MODULE PANEL -->
+      <div x-show="activeModule === 'fit'" x-cloak>
+        <h2 class="font-bold text-blue-800 mb-3">📐 地籍圖套圖</h2>
+
+        <!-- Step 1: Upload -->
+        <div class="bg-gray-50 rounded-lg p-3 mb-3">
+          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">① 上傳地籍資料</p>
+          <label class="block text-sm mb-1">KC 格式 (D14/D2B/D2C/D2D)</label>
+          <input type="file" accept=".txt,.d14,.d2b,.d2c,.d2d"
+                 @change="fitModule.loadKCFile($event)"
+                 class="w-full text-xs border rounded p-1" />
+          <label class="block text-sm mt-2 mb-1">現況點 CSV (點號,N,E)</label>
+          <input type="file" accept=".csv,.txt"
+                 @change="fitModule.loadSurveyCSV($event)"
+                 class="w-full text-xs border rounded p-1" />
+        </div>
+
+        <!-- Step 2: Params -->
+        <div class="bg-gray-50 rounded-lg p-3 mb-3">
+          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">② 套合參數</p>
+          <label class="block text-xs mb-1">案號</label>
+          <input type="text" x-model="fitModule.caseNo" placeholder="例: KC0001"
+                 class="w-full border rounded px-2 py-1 text-sm mb-2" />
+          <label class="block text-xs mb-1">初始旋轉角 θ (度)</label>
+          <input type="number" x-model="fitModule.initTheta" step="0.001"
+                 class="w-full border rounded px-2 py-1 text-sm" />
+        </div>
+
+        <!-- Step 3: Run -->
+        <button @click="fitModule.run()"
+                :disabled="fitModule.running"
+                class="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-gray-400 text-white rounded-lg py-2 font-semibold text-sm transition">
+          <span x-show="!fitModule.running">▶ 執行套合運算</span>
+          <span x-show="fitModule.running" class="flex items-center justify-center gap-2">
+            <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+            Pyodide 運算中…
+          </span>
+        </button>
+
+        <!-- Step 4: Results -->
+        <div x-show="fitModule.result" x-cloak class="bg-green-50 rounded-lg p-3 mt-3 border border-green-200">
+          <p class="text-xs font-semibold text-green-700 mb-2">套合成果</p>
+          <div class="text-xs space-y-1">
+            <div>旋轉角 θ: <span x-text="fitModule.result?.theta?.toFixed(4) + ' °'" class="font-mono"></span></div>
+            <div>平移 tx: <span x-text="fitModule.result?.tx?.toFixed(3) + ' m'" class="font-mono"></span></div>
+            <div>平移 ty: <span x-text="fitModule.result?.ty?.toFixed(3) + ' m'" class="font-mono"></span></div>
+            <div>RMSE 前: <span x-text="fitModule.result?.rmseBefore?.toFixed(3) + ' m'" class="font-mono text-red-600"></span></div>
+            <div>RMSE 後: <span x-text="fitModule.result?.rmseAfter?.toFixed(3) + ' m'" class="font-mono text-green-600"></span></div>
+          </div>
+        </div>
+
+        <!-- Step 5: Export -->
+        <div x-show="fitModule.result" x-cloak class="mt-3 space-y-2">
+          <button @click="fitModule.exportTXT()"
+                  class="w-full bg-orange-500 hover:bg-orange-400 text-white rounded py-1.5 text-sm font-medium">
+            💾 匯出座標 TXT (放樣用)
+          </button>
+          <button @click="fitModule.exportGPKG()"
+                  class="w-full bg-teal-600 hover:bg-teal-500 text-white rounded py-1.5 text-sm font-medium">
+            📦 匯出 GeoPackage (QGIS)
+          </button>
+          <button @click="fitModule.sendToAdjust()"
+                  class="w-full bg-purple-600 hover:bg-purple-500 text-white rounded py-1.5 text-sm font-medium">
+            → 送入調整模組
+          </button>
+        </div>
+      </div>
+
+      <!-- ADJUST MODULE PANEL -->
+      <div x-show="activeModule === 'adjust'" x-cloak>
+        <h2 class="font-bold text-indigo-800 mb-3">📏 地籍圖調整</h2>
+
+        <div class="bg-gray-50 rounded-lg p-3 mb-3">
+          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">① 輸入資料</p>
+          <label class="block text-sm mb-1">地籍線 GeoPackage / GeoJSON</label>
+          <input type="file" accept=".gpkg,.geojson,.json"
+                 @change="adjustModule.loadFile($event)"
+                 class="w-full text-xs border rounded p-1" />
+          <p class="text-xs text-gray-400 mt-1">或從套圖模組直接帶入</p>
+          <div x-show="adjustModule.fromFit" class="mt-1 text-xs text-purple-600 font-medium">
+            ✓ 已從套圖模組帶入資料
+          </div>
+        </div>
+
+        <div class="bg-gray-50 rounded-lg p-3 mb-3">
+          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">② 調整參數</p>
+          <label class="block text-xs mb-1">法定公差 (m)</label>
+          <input type="number" x-model="adjustModule.tolerance" step="0.01" value="0.05"
+                 class="w-full border rounded px-2 py-1 text-sm mb-2" />
+          <label class="block text-xs mb-1">最大調整量 (m)</label>
+          <input type="number" x-model="adjustModule.maxShift" step="0.01" value="0.5"
+                 class="w-full border rounded px-2 py-1 text-sm" />
+        </div>
+
+        <button @click="adjustModule.run()"
+                :disabled="adjustModule.running"
+                class="w-full bg-indigo-700 hover:bg-indigo-600 disabled:bg-gray-400 text-white rounded-lg py-2 font-semibold text-sm transition">
+          <span x-show="!adjustModule.running">▶ 執行調整運算</span>
+          <span x-show="adjustModule.running">Pyodide 運算中…</span>
+        </button>
+
+        <div x-show="adjustModule.result" x-cloak class="bg-green-50 rounded-lg p-3 mt-3 border border-green-200">
+          <p class="text-xs font-semibold text-green-700 mb-2">調整成果</p>
+          <div class="text-xs space-y-1">
+            <div>調整點數: <span x-text="adjustModule.result?.adjustedCount" class="font-mono"></span></div>
+            <div>最大較差 前: <span x-text="adjustModule.result?.maxErrorBefore?.toFixed(3) + ' m'" class="font-mono text-red-600"></span></div>
+            <div>最大較差 後: <span x-text="adjustModule.result?.maxErrorAfter?.toFixed(3) + ' m'" class="font-mono text-green-600"></span></div>
+          </div>
+        </div>
+
+        <div x-show="adjustModule.result" x-cloak class="mt-3">
+          <button @click="adjustModule.exportGPKG()"
+                  class="w-full bg-teal-600 hover:bg-teal-500 text-white rounded py-1.5 text-sm font-medium">
+            📦 匯出調整後 GeoPackage
+          </button>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- Map Panel -->
+    <main class="flex-1 flex flex-col overflow-hidden">
+      <div id="map" class="flex-1"></div>
+
+      <!-- AI Explanation Panel -->
+      <div class="shrink-0 bg-gray-800 text-gray-200 px-4 py-2 min-h-16 max-h-32 overflow-y-auto">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-xs font-semibold text-yellow-400">🤖 AI 套合說明</span>
+          <button @click="aiExplain.generate()"
+                  :disabled="!fitModule.result || aiExplain.loading"
+                  class="text-xs bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 px-2 py-0.5 rounded transition">
+            <span x-show="!aiExplain.loading">生成說明</span>
+            <span x-show="aiExplain.loading">分析中…</span>
+          </button>
+        </div>
+        <p class="text-xs leading-relaxed" x-text="aiExplain.text || '執行套合運算後，點擊「生成說明」取得 AI 分析報告。'"></p>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- Status Bar -->
+  <footer class="bg-gray-700 text-gray-300 text-xs px-4 py-1 flex items-center gap-4 shrink-0">
+    <span x-text="statusMsg"></span>
+    <span class="ml-auto" x-text="'Pyodide: ' + pyodideStatus"></span>
+  </footer>
+
+  <!-- Scripts -->
+  <script type="module" src="js/app.js"></script>
+
+</body>
+</html>
