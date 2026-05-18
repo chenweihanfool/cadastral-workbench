@@ -1,21 +1,30 @@
+/* ── Pyodide Worker ──────────────────────────────────────────────────────── */
 importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js');
 
-let pyodide = null;
+let pyodide   = null;
 let fitScript = null;
-let adjustScript = null;
+let adjScript = null;
 
-async function initPyodide() {
-  pyodide = await loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.1/full/' });
+// Python globals persisted between runPython() calls in the same interpreter
+// segs / ref_pts / boundary_pts / cy / cx  — kept alive after 'parse' call
+// coa_points / parcel_points / parcel_info / pt_index — kept alive after adj parse
+
+async function _init() {
+  pyodide = await loadPyodide({
+    indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.1/full/',
+  });
   await pyodide.loadPackage(['numpy', 'scipy']);
 
-  // Fetch Python scripts from relative path (works under GitHub Pages)
-  const base = self.location.href.replace('/workers/pyodide_worker.js', '');
-  const [fitRes, adjRes] = await Promise.all([
+  // Fetch Python scripts relative to the repo root
+  const base = self.location.href.replace(/\/workers\/[^/]+$/, '');
+  const [fRes, aRes] = await Promise.all([
     fetch(`${base}/python/fit_cadastral.py`),
     fetch(`${base}/python/adjust_cadastral.py`),
   ]);
-  fitScript = await fitRes.text();
-  adjustScript = await adjRes.text();
+  if (!fRes.ok) throw new Error('Cannot fetch fit_cadastral.py');
+  if (!aRes.ok) throw new Error('Cannot fetch adjust_cadastral.py');
+  fitScript = await fRes.text();
+  adjScript = await aRes.text();
 
   self.postMessage({ type: 'ready' });
 }
@@ -25,7 +34,7 @@ self.onmessage = async (e) => {
 
   if (type === 'init') {
     try {
-      await initPyodide();
+      await _init();
     } catch (err) {
       self.postMessage({ type: 'error', payload: 'Pyodide 初始化失敗：' + err.message });
     }
@@ -33,46 +42,62 @@ self.onmessage = async (e) => {
   }
 
   if (!pyodide) {
-    self.postMessage({ type: 'error', payload: 'Pyodide 尚未初始化' });
+    self.postMessage({ type: 'error', payload: 'Pyodide 未就緒' });
     return;
   }
 
-  if (type === 'run_fit') {
-    try {
-      const result = await runFit(payload);
-      self.postMessage({ type: 'fit_result', payload: result });
-    } catch (err) {
-      self.postMessage({ type: 'error', payload: '套合運算錯誤：' + err.message });
+  try {
+    switch (type) {
+
+      // ── FIT: parse DBF files ──────────────────────────────────────────────
+      case 'fit_parse': {
+        pyodide.globals.set('d14_buf', new Uint8Array(payload.d14));
+        pyodide.globals.set('d2c_buf', new Uint8Array(payload.d2c));
+        pyodide.globals.set('d2d_buf', new Uint8Array(payload.d2d));
+        pyodide.globals.set('d2b_buf', new Uint8Array(payload.d2b));
+        pyodide.globals.set('fit_mode', 'parse');
+        pyodide.runPython(fitScript);
+        const result = JSON.parse(pyodide.globals.get('result_json'));
+        self.postMessage({ type: 'fit_parse_result', payload: result });
+        break;
+      }
+
+      // ── FIT: run optimisation ─────────────────────────────────────────────
+      case 'fit_run': {
+        pyodide.globals.set('weights_json', JSON.stringify(payload.weights || {}));
+        pyodide.globals.set('fit_mode', 'fit');
+        pyodide.runPython(fitScript);
+        const result = JSON.parse(pyodide.globals.get('result_json'));
+        self.postMessage({ type: 'fit_run_result', payload: result });
+        break;
+      }
+
+      // ── ADJUST: parse COA/BNP/PAR files ──────────────────────────────────
+      case 'adj_parse': {
+        pyodide.globals.set('coa_buf', new Uint8Array(payload.coa));
+        pyodide.globals.set('bnp_buf', new Uint8Array(payload.bnp));
+        pyodide.globals.set('par_buf', new Uint8Array(payload.par));
+        pyodide.globals.set('adj_mode', 'parse');
+        pyodide.runPython(adjScript);
+        const result = JSON.parse(pyodide.globals.get('result_json'));
+        self.postMessage({ type: 'adj_parse_result', payload: result });
+        break;
+      }
+
+      // ── ADJUST: run adjustment ────────────────────────────────────────────
+      case 'adj_run': {
+        pyodide.globals.set('target_keys_json', JSON.stringify(payload.targetKeys || []));
+        pyodide.globals.set('adj_mode', 'adjust');
+        pyodide.runPython(adjScript);
+        const result = JSON.parse(pyodide.globals.get('result_json'));
+        self.postMessage({ type: 'adj_run_result', payload: result });
+        break;
+      }
+
+      default:
+        self.postMessage({ type: 'error', payload: '未知訊息類型：' + type });
     }
-  } else if (type === 'run_adjust') {
-    try {
-      const result = await runAdjust(payload);
-      self.postMessage({ type: 'adjust_result', payload: result });
-    } catch (err) {
-      self.postMessage({ type: 'error', payload: '調整運算錯誤：' + err.message });
-    }
+  } catch (err) {
+    self.postMessage({ type: 'error', payload: err.message });
   }
 };
-
-async function runFit({ kcData, surveyPoints, initTheta, caseNo }) {
-  // Pass data into Python via pyodide globals
-  pyodide.globals.set('kc_points_json', JSON.stringify(kcData.points));
-  pyodide.globals.set('survey_points_json', JSON.stringify(surveyPoints));
-  pyodide.globals.set('init_theta', initTheta);
-  pyodide.globals.set('case_no', caseNo);
-
-  // Run the fit script — it must set `result_json` as output
-  pyodide.runPython(fitScript);
-  const resultJson = pyodide.globals.get('result_json');
-  return JSON.parse(resultJson);
-}
-
-async function runAdjust({ geojson, tolerance, maxShift }) {
-  pyodide.globals.set('input_geojson', JSON.stringify(geojson));
-  pyodide.globals.set('tolerance', tolerance);
-  pyodide.globals.set('max_shift', maxShift);
-
-  pyodide.runPython(adjustScript);
-  const resultJson = pyodide.globals.get('result_json');
-  return JSON.parse(resultJson);
-}

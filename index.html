@@ -1,228 +1,201 @@
 <!DOCTYPE html>
-<html lang="zh-TW" x-data="app()" x-init="init()">
+<html lang="zh-TW">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CadastralWorkbench</title>
-
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Alpine.js -->
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-  <!-- Leaflet -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <!-- Leaflet-Geoman -->
-  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css" />
-  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
-
-  <style>
-    [x-cloak] { display: none !important; }
-    #map { height: 100%; min-height: 400px; }
-    .tab-active { @apply bg-blue-700 text-white; }
-    .tab-inactive { @apply bg-gray-200 text-gray-700 hover:bg-gray-300; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CadastralWorkbench</title>
+<link rel="stylesheet" href="css/style.css">
 </head>
-<body class="bg-gray-100 h-screen flex flex-col overflow-hidden">
+<body>
 
-  <!-- Navbar -->
-  <header class="bg-blue-800 text-white px-4 py-2 flex items-center gap-4 shrink-0">
-    <span class="font-bold text-lg tracking-wide">⚡ CadastralWorkbench</span>
-    <nav class="flex gap-2 ml-4">
-      <button
-        @click="activeModule = 'fit'"
-        :class="activeModule === 'fit' ? 'tab-active' : 'tab-inactive'"
-        class="px-3 py-1 rounded text-sm font-medium transition">
-        📐 套圖模組
-      </button>
-      <button
-        @click="activeModule = 'adjust'"
-        :class="activeModule === 'adjust' ? 'tab-active' : 'tab-inactive'"
-        class="px-3 py-1 rounded text-sm font-medium transition">
-        📏 調整模組
-      </button>
-    </nav>
-    <div class="ml-auto flex items-center gap-3">
-      <button @click="showSettings = !showSettings" class="text-sm bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded">
-        ⚙ 設定
-      </button>
-      <span class="text-xs text-blue-300">v0.1.0</span>
+<!-- ── Header ───────────────────────────────────────────────────────────── -->
+<header>
+  <span style="font-size:1.3rem">⚡</span>
+  <h1>CadastralWorkbench</h1>
+  <span class="badge">v0.2</span>
+  <div class="spacer"></div>
+  <button id="btn-download">⬇ 下載結果</button>
+</header>
+
+<!-- ── Main Layout ──────────────────────────────────────────────────────── -->
+<div class="layout">
+
+  <!-- ── 側欄 ───────────────────────────────────────────────────────────── -->
+  <div class="sidebar">
+
+    <!-- 模組分頁 -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="fit">📐 套圖</button>
+      <button class="tab-btn"        data-tab="adj">📏 調整</button>
     </div>
-  </header>
 
-  <!-- Settings Panel (overlay) -->
-  <div x-show="showSettings" x-cloak @click.away="showSettings = false"
-       class="absolute top-12 right-4 z-50 bg-white shadow-xl rounded-lg p-4 w-80 border">
-    <h3 class="font-bold mb-3 text-gray-700">設定</h3>
-    <label class="block text-sm text-gray-600 mb-1">AI API Key (OpenAI / Gemini)</label>
-    <input type="password" x-model="settings.apiKey" @change="saveSettings()"
-           class="w-full border rounded px-2 py-1 text-sm mb-2" placeholder="sk-..." />
-    <label class="block text-sm text-gray-600 mb-1">AI 提供者</label>
-    <select x-model="settings.aiProvider" @change="saveSettings()" class="w-full border rounded px-2 py-1 text-sm mb-3">
-      <option value="openai">OpenAI (gpt-4o)</option>
-      <option value="gemini">Gemini 1.5 Flash</option>
-    </select>
-    <div class="text-xs text-gray-400">API Key 僅存於本機 localStorage，不上傳任何伺服器。</div>
+    <!-- ══════════════════ 套圖分頁 ══════════════════ -->
+    <div id="tab-fit" class="tab-panel active">
+
+      <!-- 上傳 -->
+      <div class="section">
+        <h3>上傳 KC 地籍資料</h3>
+        <div id="drop-zone">
+          <div class="icon">📂</div>
+          拖放或點擊選取 4 個 DBF 檔案<br>
+          <span style="font-size:.72rem;color:var(--muted)">D14 · D2C · D2D · D2B</span>
+          <input id="file-input" type="file" multiple style="display:none">
+        </div>
+        <div id="file-list" style="margin-top:8px"></div>
+        <div class="progress-wrap" id="fit-progress"><div class="progress-bar"></div></div>
+        <button id="btn-upload" class="btn btn-primary" style="margin-top:8px" disabled>解析並顯示</button>
+      </div>
+
+      <!-- 套疊控制 -->
+      <div id="fit-section" class="section" style="display:none">
+        <h3>套疊控制</h3>
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:8px">
+          點擊地圖上的參考點可調整個別權重
+        </div>
+        <button id="btn-fit" class="btn btn-primary" disabled>▶ 執行套疊</button>
+        <button id="btn-fit-gpkg" class="btn btn-green" style="display:none">📦 匯出 GeoPackage</button>
+        <button id="btn-fit-send-adj" class="btn btn-secondary" style="display:none">→ 送入調整模組</button>
+      </div>
+
+      <!-- 統計 -->
+      <div class="section">
+        <h3>資料統計</h3>
+        <div class="stat-grid">
+          <div class="stat-box"><div class="label">界址線段</div><div class="value" id="stat-segs">—</div></div>
+          <div class="stat-box"><div class="label">參考點</div><div class="value" id="stat-ref">—</div></div>
+          <div class="stat-box"><div class="label">RMSE</div><div class="value" id="stat-rmse">—</div></div>
+          <div class="stat-box"><div class="label">最大垂距</div><div class="value" id="stat-max">—</div></div>
+          <div class="stat-box" style="grid-column:span 2"><div class="label">參與套疊 / 總參考點</div><div class="value" id="stat-used">—</div></div>
+        </div>
+      </div>
+
+      <!-- 套疊結果參數 -->
+      <div id="params-section" class="section" style="display:none">
+        <h3>套疊結果</h3>
+        <div class="param-row"><span>旋轉角 θ</span><span class="val" id="param-theta">—</span></div>
+        <div class="param-row"><span>N 平移 ty</span><span class="val" id="param-ty">—</span></div>
+        <div class="param-row"><span>E 平移 tx</span><span class="val" id="param-tx">—</span></div>
+      </div>
+
+      <!-- 選中點 -->
+      <div id="point-panel" class="section">
+        <h3>選中點設定</h3>
+        <div class="point-info">（尚未選取）</div>
+        <div class="weight-buttons">
+          <button class="weight-btn">排除</button>
+          <button class="weight-btn">×0.25</button>
+          <button class="weight-btn">×0.5</button>
+          <button class="weight-btn active">×1</button>
+          <button class="weight-btn">×2</button>
+          <button class="weight-btn">×4</button>
+        </div>
+      </div>
+
+      <!-- 圖層 -->
+      <div class="section">
+        <h3>圖層顯示</h3>
+        <div class="toggle-row"><span>原始界址線</span><label class="toggle"><input id="layer-original" type="checkbox" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>套疊後界址線</span><label class="toggle"><input id="layer-fitted" type="checkbox" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>垂距殘差線</span><label class="toggle"><input id="layer-residuals" type="checkbox" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>套疊標籤</span><label class="toggle"><input id="layer-labels" type="checkbox" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>界址點</span><label class="toggle"><input id="layer-boundary" type="checkbox" checked><span class="slider"></span></label></div>
+      </div>
+
+      <!-- 圖例 -->
+      <div class="section">
+        <h3>圖例</h3>
+        <div class="legend-item"><div class="legend-line" style="background:rgba(70,120,200,.7)"></div><span>原始界址線</span></div>
+        <div class="legend-item"><div class="legend-line" style="background:#3ecf6e"></div><span>套疊後界址線</span></div>
+        <div class="legend-item"><div class="legend-circle" style="background:#3ecf6e"></div><span>殘差 &lt;0.1 m（良好）</span></div>
+        <div class="legend-item"><div class="legend-circle" style="background:#f5c542"></div><span>殘差 0.1–0.5 m（注意）</span></div>
+        <div class="legend-item"><div class="legend-circle" style="background:#f05252"></div><span>殘差 &gt;0.5 m（異常）</span></div>
+        <div class="legend-item"><div class="legend-circle" style="background:rgba(200,200,255,.6)"></div><span>界址點</span></div>
+        <div class="legend-item"><div class="legend-circle" style="background:rgba(245,197,66,.7)"></div><span>旋轉中心（重心）</span></div>
+      </div>
+
+    </div><!-- /tab-fit -->
+
+    <!-- ══════════════════ 調整分頁 ══════════════════ -->
+    <div id="tab-adj" class="tab-panel">
+
+      <!-- 上傳 -->
+      <div class="section">
+        <h3>上傳地籍調整資料</h3>
+        <div id="adj-drop-zone">
+          <div class="icon">📂</div>
+          拖放或點擊選取 3 個檔案<br>
+          <span style="font-size:.72rem;color:var(--muted)">COA · BNP · PAR</span>
+          <input id="adj-file-input" type="file" multiple style="display:none">
+        </div>
+        <div id="adj-file-list" style="margin-top:8px"></div>
+        <div style="font-size:.72rem;color:var(--muted);margin-top:4px">或從套圖模組帶入</div>
+        <div id="adj-from-fit" style="display:none;font-size:.72rem;color:var(--purple);margin-top:4px">✓ 已從套圖模組帶入資料</div>
+        <div class="progress-wrap" id="adj-progress"><div class="progress-bar"></div></div>
+        <button id="btn-adj-upload" class="btn btn-primary" style="margin-top:8px" disabled>解析並顯示宗地</button>
+      </div>
+
+      <!-- 調整控制 -->
+      <div id="adj-section" class="section" style="display:none">
+        <h3>調整控制</h3>
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:6px">
+          紅色＝超差宗地；勾選後執行調整
+        </div>
+        <div id="adj-parcel-list" style="max-height:160px;overflow-y:auto;margin-bottom:8px"></div>
+        <button id="btn-adj-run" class="btn btn-primary" disabled>▶ 執行調整</button>
+        <button id="btn-adj-gpkg" class="btn btn-green" style="display:none">📦 匯出 GeoPackage</button>
+        <button id="btn-adj-coa"  class="btn btn-secondary" style="display:none">💾 下載調整後 COA</button>
+      </div>
+
+      <!-- 調整結果 -->
+      <div id="adj-result-section" class="section" style="display:none">
+        <h3>調整結果</h3>
+        <div id="adj-result-list" style="font-size:.75rem;line-height:1.8"></div>
+      </div>
+
+      <!-- 調整圖層 -->
+      <div class="section">
+        <h3>圖層顯示</h3>
+        <div class="toggle-row"><span>調整前輪廓（紅）</span><label class="toggle"><input id="adj-layer-before" type="checkbox" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>調整後輪廓（綠）</span><label class="toggle"><input id="adj-layer-after" type="checkbox" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>宗地標籤</span><label class="toggle"><input id="adj-layer-labels" type="checkbox" checked><span class="slider"></span></label></div>
+      </div>
+
+      <!-- 調整圖例 -->
+      <div class="section">
+        <h3>圖例</h3>
+        <div class="legend-item"><div class="legend-circle" style="background:#3ecf6e"></div><span>面積在公差內</span></div>
+        <div class="legend-item"><div class="legend-circle" style="background:#f05252"></div><span>面積超出公差</span></div>
+        <div class="legend-item"><div class="legend-line" style="background:#f05252;border:1px dashed #f05252"></div><span>調整前輪廓</span></div>
+        <div class="legend-item"><div class="legend-line" style="background:#3ecf6e"></div><span>調整後輪廓</span></div>
+      </div>
+
+    </div><!-- /tab-adj -->
+
+  </div><!-- /sidebar -->
+
+  <!-- ── 地圖畫布 ─────────────────────────────────────────────────────────── -->
+  <div class="canvas-wrap">
+    <canvas id="map-canvas"></canvas>
+    <div id="tooltip"></div>
+
+    <div id="pyodide-status">
+      <div class="dot-status"></div>
+      <span id="pyodide-label">Pyodide 載入中…</span>
+    </div>
+
+    <div class="zoom-btns">
+      <button class="zoom-btn" id="btn-zoom-in">＋</button>
+      <button class="zoom-btn" id="btn-zoom-fit">⊙</button>
+      <button class="zoom-btn" id="btn-zoom-out">－</button>
+    </div>
+    <div id="hint">拖曳移動 · 滾輪縮放 · 點擊參考點設定權重</div>
   </div>
 
-  <!-- Main Content -->
-  <div class="flex flex-1 overflow-hidden">
+</div><!-- /layout -->
 
-    <!-- Left Panel -->
-    <aside class="w-80 bg-white border-r flex flex-col overflow-y-auto shrink-0 p-4 gap-4">
+<div id="toast"></div>
 
-      <!-- FIT MODULE PANEL -->
-      <div x-show="activeModule === 'fit'" x-cloak>
-        <h2 class="font-bold text-blue-800 mb-3">📐 地籍圖套圖</h2>
-
-        <!-- Step 1: Upload -->
-        <div class="bg-gray-50 rounded-lg p-3 mb-3">
-          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">① 上傳地籍資料</p>
-          <label class="block text-sm mb-1">KC 格式 (D14/D2B/D2C/D2D)</label>
-          <input type="file" accept=".txt,.d14,.d2b,.d2c,.d2d"
-                 @change="fitModule.loadKCFile($event)"
-                 class="w-full text-xs border rounded p-1" />
-          <label class="block text-sm mt-2 mb-1">現況點 CSV (點號,N,E)</label>
-          <input type="file" accept=".csv,.txt"
-                 @change="fitModule.loadSurveyCSV($event)"
-                 class="w-full text-xs border rounded p-1" />
-        </div>
-
-        <!-- Step 2: Params -->
-        <div class="bg-gray-50 rounded-lg p-3 mb-3">
-          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">② 套合參數</p>
-          <label class="block text-xs mb-1">案號</label>
-          <input type="text" x-model="fitModule.caseNo" placeholder="例: KC0001"
-                 class="w-full border rounded px-2 py-1 text-sm mb-2" />
-          <label class="block text-xs mb-1">初始旋轉角 θ (度)</label>
-          <input type="number" x-model="fitModule.initTheta" step="0.001"
-                 class="w-full border rounded px-2 py-1 text-sm" />
-        </div>
-
-        <!-- Step 3: Run -->
-        <button @click="fitModule.run()"
-                :disabled="fitModule.running"
-                class="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-gray-400 text-white rounded-lg py-2 font-semibold text-sm transition">
-          <span x-show="!fitModule.running">▶ 執行套合運算</span>
-          <span x-show="fitModule.running" class="flex items-center justify-center gap-2">
-            <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-            </svg>
-            Pyodide 運算中…
-          </span>
-        </button>
-
-        <!-- Step 4: Results -->
-        <div x-show="fitModule.result" x-cloak class="bg-green-50 rounded-lg p-3 mt-3 border border-green-200">
-          <p class="text-xs font-semibold text-green-700 mb-2">套合成果</p>
-          <div class="text-xs space-y-1">
-            <div>旋轉角 θ: <span x-text="fitModule.result?.theta?.toFixed(4) + ' °'" class="font-mono"></span></div>
-            <div>平移 tx: <span x-text="fitModule.result?.tx?.toFixed(3) + ' m'" class="font-mono"></span></div>
-            <div>平移 ty: <span x-text="fitModule.result?.ty?.toFixed(3) + ' m'" class="font-mono"></span></div>
-            <div>RMSE 前: <span x-text="fitModule.result?.rmseBefore?.toFixed(3) + ' m'" class="font-mono text-red-600"></span></div>
-            <div>RMSE 後: <span x-text="fitModule.result?.rmseAfter?.toFixed(3) + ' m'" class="font-mono text-green-600"></span></div>
-          </div>
-        </div>
-
-        <!-- Step 5: Export -->
-        <div x-show="fitModule.result" x-cloak class="mt-3 space-y-2">
-          <button @click="fitModule.exportTXT()"
-                  class="w-full bg-orange-500 hover:bg-orange-400 text-white rounded py-1.5 text-sm font-medium">
-            💾 匯出座標 TXT (放樣用)
-          </button>
-          <button @click="fitModule.exportGPKG()"
-                  class="w-full bg-teal-600 hover:bg-teal-500 text-white rounded py-1.5 text-sm font-medium">
-            📦 匯出 GeoPackage (QGIS)
-          </button>
-          <button @click="fitModule.sendToAdjust()"
-                  class="w-full bg-purple-600 hover:bg-purple-500 text-white rounded py-1.5 text-sm font-medium">
-            → 送入調整模組
-          </button>
-        </div>
-      </div>
-
-      <!-- ADJUST MODULE PANEL -->
-      <div x-show="activeModule === 'adjust'" x-cloak>
-        <h2 class="font-bold text-indigo-800 mb-3">📏 地籍圖調整</h2>
-
-        <div class="bg-gray-50 rounded-lg p-3 mb-3">
-          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">① 輸入資料</p>
-          <label class="block text-sm mb-1">地籍線 GeoPackage / GeoJSON</label>
-          <input type="file" accept=".gpkg,.geojson,.json"
-                 @change="adjustModule.loadFile($event)"
-                 class="w-full text-xs border rounded p-1" />
-          <p class="text-xs text-gray-400 mt-1">或從套圖模組直接帶入</p>
-          <div x-show="adjustModule.fromFit" class="mt-1 text-xs text-purple-600 font-medium">
-            ✓ 已從套圖模組帶入資料
-          </div>
-        </div>
-
-        <div class="bg-gray-50 rounded-lg p-3 mb-3">
-          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">② 調整參數</p>
-          <label class="block text-xs mb-1">法定公差 (m)</label>
-          <input type="number" x-model="adjustModule.tolerance" step="0.01" value="0.05"
-                 class="w-full border rounded px-2 py-1 text-sm mb-2" />
-          <label class="block text-xs mb-1">最大調整量 (m)</label>
-          <input type="number" x-model="adjustModule.maxShift" step="0.01" value="0.5"
-                 class="w-full border rounded px-2 py-1 text-sm" />
-        </div>
-
-        <button @click="adjustModule.run()"
-                :disabled="adjustModule.running"
-                class="w-full bg-indigo-700 hover:bg-indigo-600 disabled:bg-gray-400 text-white rounded-lg py-2 font-semibold text-sm transition">
-          <span x-show="!adjustModule.running">▶ 執行調整運算</span>
-          <span x-show="adjustModule.running">Pyodide 運算中…</span>
-        </button>
-
-        <div x-show="adjustModule.result" x-cloak class="bg-green-50 rounded-lg p-3 mt-3 border border-green-200">
-          <p class="text-xs font-semibold text-green-700 mb-2">調整成果</p>
-          <div class="text-xs space-y-1">
-            <div>調整點數: <span x-text="adjustModule.result?.adjustedCount" class="font-mono"></span></div>
-            <div>最大較差 前: <span x-text="adjustModule.result?.maxErrorBefore?.toFixed(3) + ' m'" class="font-mono text-red-600"></span></div>
-            <div>最大較差 後: <span x-text="adjustModule.result?.maxErrorAfter?.toFixed(3) + ' m'" class="font-mono text-green-600"></span></div>
-          </div>
-        </div>
-
-        <div x-show="adjustModule.result" x-cloak class="mt-3">
-          <button @click="adjustModule.exportGPKG()"
-                  class="w-full bg-teal-600 hover:bg-teal-500 text-white rounded py-1.5 text-sm font-medium">
-            📦 匯出調整後 GeoPackage
-          </button>
-        </div>
-      </div>
-
-    </aside>
-
-    <!-- Map Panel -->
-    <main class="flex-1 flex flex-col overflow-hidden">
-      <div id="map" class="flex-1"></div>
-
-      <!-- AI Explanation Panel -->
-      <div class="shrink-0 bg-gray-800 text-gray-200 px-4 py-2 min-h-16 max-h-32 overflow-y-auto">
-        <div class="flex items-center gap-2 mb-1">
-          <span class="text-xs font-semibold text-yellow-400">🤖 AI 套合說明</span>
-          <button @click="aiExplain.generate()"
-                  :disabled="!fitModule.result || aiExplain.loading"
-                  class="text-xs bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 px-2 py-0.5 rounded transition">
-            <span x-show="!aiExplain.loading">生成說明</span>
-            <span x-show="aiExplain.loading">分析中…</span>
-          </button>
-        </div>
-        <p class="text-xs leading-relaxed" x-text="aiExplain.text || '執行套合運算後，點擊「生成說明」取得 AI 分析報告。'"></p>
-      </div>
-    </main>
-
-  </div>
-
-  <!-- Status Bar -->
-  <footer class="bg-gray-700 text-gray-300 text-xs px-4 py-1 flex items-center gap-4 shrink-0">
-    <span x-text="statusMsg"></span>
-    <span class="ml-auto" x-text="'Pyodide: ' + pyodideStatus"></span>
-  </footer>
-
-  <!-- Scripts -->
-  <script type="module" src="js/app.js"></script>
-
+<script src="js/gpkg_writer.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>
