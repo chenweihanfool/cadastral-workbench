@@ -870,6 +870,10 @@ function showToast(msg, isError = false) {
   _toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
 }
 
+// ── 全域攔截：防止瀏覽器對拖放執行預設「開啟/瀏覽」行為 ─────────────────────
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop',     e => e.preventDefault());
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 resizeCanvas();
 render();
