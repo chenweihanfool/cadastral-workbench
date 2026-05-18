@@ -477,7 +477,6 @@ const FIT_EXTS = ['D14', 'D2C', 'D2D', 'D2B'];
 const dropZone  = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
 
-dropZone.onclick  = () => fileInput.click();
 fileInput.onchange = e => handleFitFiles([...e.target.files]);
 dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('over'); });
 dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('over'));
@@ -619,7 +618,6 @@ const ADJ_EXTS   = ['COA', 'BNP', 'PAR'];
 const adjDropZone  = document.getElementById('adj-drop-zone');
 const adjFileInput = document.getElementById('adj-file-input');
 
-adjDropZone.onclick   = () => adjFileInput.click();
 adjFileInput.onchange = e => handleAdjFiles([...e.target.files]);
 adjDropZone.addEventListener('dragover',  e => { e.preventDefault(); adjDropZone.classList.add('over'); });
 adjDropZone.addEventListener('dragleave', ()  => adjDropZone.classList.remove('over'));
