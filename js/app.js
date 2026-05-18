@@ -473,11 +473,12 @@ worker.postMessage({ type: 'init' });
 // ═══════════════════════════════════════════════════════════════════════════════
 //  資料夾遞迴讀取（FileSystemEntry API）
 // ═══════════════════════════════════════════════════════════════════════════════
-async function readDropItems(dataTransferItems, extensions) {
+// entries 必須在 drop 事件同步階段就先擷取，await 之後 dataTransfer 就失效
+async function processEntries(entries, extensions) {
   const extSet  = new Set(extensions.map(e => e.toUpperCase()));
   const results = [];
 
-  async function processEntry(entry) {
+  async function walk(entry) {
     if (entry.isFile) {
       const ext = entry.name.split('.').pop().toUpperCase();
       if (extSet.has(ext)) {
@@ -486,19 +487,15 @@ async function readDropItems(dataTransferItems, extensions) {
       }
     } else if (entry.isDirectory) {
       const reader = entry.createReader();
-      // readEntries 最多一次 100 筆，需迴圈直到空
       let batch;
       do {
         batch = await new Promise((res, rej) => reader.readEntries(res, rej));
-        for (const child of batch) await processEntry(child);
+        for (const child of batch) await walk(child);
       } while (batch.length > 0);
     }
   }
 
-  for (const item of dataTransferItems) {
-    const entry = item.webkitGetAsEntry?.();
-    if (entry) await processEntry(entry);
-  }
+  for (const entry of entries) await walk(entry);
   return results;
 }
 
@@ -516,9 +513,15 @@ dropZone.addEventListener('dragenter', e => { e.preventDefault(); _fitDragDepth+
 dropZone.addEventListener('dragover',  e => { e.preventDefault(); });
 dropZone.addEventListener('dragleave', () => { if (--_fitDragDepth <= 0) { _fitDragDepth = 0; dropZone.classList.remove('over'); } });
 dropZone.addEventListener('drop', async e => {
-  e.preventDefault(); _fitDragDepth = 0; dropZone.classList.remove('over');
-  const files = await readDropItems([...e.dataTransfer.items], FIT_EXTS);
-  handleFitFiles(files.length ? files : [...e.dataTransfer.files]);
+  e.preventDefault();
+  e.stopPropagation();
+  _fitDragDepth = 0;
+  dropZone.classList.remove('over');
+  // 同步取出 entries 和 fallback files（await 後 dataTransfer 失效）
+  const entries      = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  const fallback     = [...e.dataTransfer.files];
+  const files = entries.length ? await processEntries(entries, FIT_EXTS) : fallback;
+  handleFitFiles(files.length ? files : fallback);
 });
 
 function handleFitFiles(files) {
@@ -661,9 +664,14 @@ adjDropZone.addEventListener('dragenter', e => { e.preventDefault(); _adjDragDep
 adjDropZone.addEventListener('dragover',  e => { e.preventDefault(); });
 adjDropZone.addEventListener('dragleave', () => { if (--_adjDragDepth <= 0) { _adjDragDepth = 0; adjDropZone.classList.remove('over'); } });
 adjDropZone.addEventListener('drop', async e => {
-  e.preventDefault(); _adjDragDepth = 0; adjDropZone.classList.remove('over');
-  const files = await readDropItems([...e.dataTransfer.items], ADJ_EXTS);
-  handleAdjFiles(files.length ? files : [...e.dataTransfer.files]);
+  e.preventDefault();
+  e.stopPropagation();
+  _adjDragDepth = 0;
+  adjDropZone.classList.remove('over');
+  const entries  = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  const fallback = [...e.dataTransfer.files];
+  const files = entries.length ? await processEntries(entries, ADJ_EXTS) : fallback;
+  handleAdjFiles(files.length ? files : fallback);
 });
 
 function handleAdjFiles(files) {
