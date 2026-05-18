@@ -478,10 +478,13 @@ const dropZone  = document.getElementById('drop-zone');
 const fileInput = document.getElementById('file-input');
 
 fileInput.onchange = e => handleFitFiles([...e.target.files]);
-dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('over'); });
-dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('over'));
+
+let _fitDragDepth = 0;
+dropZone.addEventListener('dragenter', e => { e.preventDefault(); _fitDragDepth++; dropZone.classList.add('over'); });
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); });
+dropZone.addEventListener('dragleave', () => { if (--_fitDragDepth <= 0) { _fitDragDepth = 0; dropZone.classList.remove('over'); } });
 dropZone.addEventListener('drop', e => {
-  e.preventDefault(); dropZone.classList.remove('over');
+  e.preventDefault(); _fitDragDepth = 0; dropZone.classList.remove('over');
   handleFitFiles([...e.dataTransfer.files]);
 });
 
@@ -619,10 +622,13 @@ const adjDropZone  = document.getElementById('adj-drop-zone');
 const adjFileInput = document.getElementById('adj-file-input');
 
 adjFileInput.onchange = e => handleAdjFiles([...e.target.files]);
-adjDropZone.addEventListener('dragover',  e => { e.preventDefault(); adjDropZone.classList.add('over'); });
-adjDropZone.addEventListener('dragleave', ()  => adjDropZone.classList.remove('over'));
+
+let _adjDragDepth = 0;
+adjDropZone.addEventListener('dragenter', e => { e.preventDefault(); _adjDragDepth++; adjDropZone.classList.add('over'); });
+adjDropZone.addEventListener('dragover',  e => { e.preventDefault(); });
+adjDropZone.addEventListener('dragleave', () => { if (--_adjDragDepth <= 0) { _adjDragDepth = 0; adjDropZone.classList.remove('over'); } });
 adjDropZone.addEventListener('drop', e => {
-  e.preventDefault(); adjDropZone.classList.remove('over');
+  e.preventDefault(); _adjDragDepth = 0; adjDropZone.classList.remove('over');
   handleAdjFiles([...e.dataTransfer.files]);
 });
 

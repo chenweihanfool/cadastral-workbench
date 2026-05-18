@@ -43,7 +43,7 @@ header h1 { font-size: 1rem; font-weight: 700; color: #e2e8f0; letter-spacing: .
 .section h3 { font-size: .82rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
 
 /* ── Drop zone ──────────────────────────────────────────────────────────── */
-#drop-zone, #adj-drop-zone { border: 1.5px dashed var(--border); border-radius: 8px; padding: 14px 10px; text-align: center; cursor: pointer; color: var(--muted); font-size: .9rem; transition: border-color .15s, color .15s; }
+#drop-zone, #adj-drop-zone { display: block; border: 1.5px dashed var(--border); border-radius: 8px; padding: 14px 10px; text-align: center; cursor: pointer; color: var(--muted); font-size: .9rem; transition: border-color .15s, color .15s; user-select: none; }
 #drop-zone:hover, #adj-drop-zone:hover, #drop-zone.over, #adj-drop-zone.over { border-color: var(--accent); color: var(--text); }
 #drop-zone .icon, #adj-drop-zone .icon { font-size: 1.6rem; margin-bottom: 4px; }
 
