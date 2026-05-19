@@ -504,25 +504,35 @@ async function processEntries(entries, extensions) {
 // ═══════════════════════════════════════════════════════════════════════════════
 const FIT_EXTS = ['D14', 'D2C', 'D2D', 'D2B'];
 const dropZone  = document.getElementById('drop-zone');
-const fileInput = document.getElementById('file-input');
 
-fileInput.onchange = e => handleFitFiles([...e.target.files]);
+function _pickFolder(handler) {
+  // webkitdirectory input：synchronous click，在任何協定下都吃 user gesture
+  const inp = document.createElement('input');
+  inp.type  = 'file';
+  inp.setAttribute('webkitdirectory', '');
+  inp.setAttribute('multiple', '');
+  inp.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0.01;z-index:-1';
+  document.body.appendChild(inp);
+  inp.onchange = e => {
+    const files = [...e.target.files];
+    document.body.removeChild(inp);
+    if (files.length) handler(files);
+    else showToast('未在資料夾中找到任何檔案', true);
+  };
+  inp.click();
+}
 
-let _fitDragDepth = 0;
-dropZone.addEventListener('dragenter', e => { e.preventDefault(); _fitDragDepth++; dropZone.classList.add('over'); });
-dropZone.addEventListener('dragover',  e => { e.preventDefault(); });
-dropZone.addEventListener('dragleave', () => { if (--_fitDragDepth <= 0) { _fitDragDepth = 0; dropZone.classList.remove('over'); } });
-dropZone.addEventListener('drop', async e => {
-  e.preventDefault();
-  e.stopPropagation();
-  _fitDragDepth = 0;
-  dropZone.classList.remove('over');
-  // 同步取出 entries 和 fallback files（await 後 dataTransfer 失效）
-  const entries      = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
-  const fallback     = [...e.dataTransfer.files];
-  const files = entries.length ? await processEntries(entries, FIT_EXTS) : fallback;
-  handleFitFiles(files.length ? files : fallback);
-});
+async function _walkDirHandle(dirHandle) {
+  const files = [];
+  for await (const [, handle] of dirHandle) {
+    if (handle.kind === 'file')      files.push(await handle.getFile());
+    else if (handle.kind === 'directory') files.push(...await _walkDirHandle(handle));
+  }
+  return files;
+}
+
+dropZone.addEventListener('click', () => _pickFolder(handleFitFiles));
+
 
 function handleFitFiles(files) {
   for (const f of files) {
@@ -653,26 +663,11 @@ document.getElementById('btn-download').onclick = () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ADJUST MODULE
 // ═══════════════════════════════════════════════════════════════════════════════
-const ADJ_EXTS   = ['COA', 'BNP', 'PAR'];
-const adjDropZone  = document.getElementById('adj-drop-zone');
-const adjFileInput = document.getElementById('adj-file-input');
+const ADJ_EXTS  = ['COA', 'BNP', 'PAR'];
+const adjDropZone = document.getElementById('adj-drop-zone');
 
-adjFileInput.onchange = e => handleAdjFiles([...e.target.files]);
+adjDropZone.addEventListener('click', () => _pickFolder(handleAdjFiles));
 
-let _adjDragDepth = 0;
-adjDropZone.addEventListener('dragenter', e => { e.preventDefault(); _adjDragDepth++; adjDropZone.classList.add('over'); });
-adjDropZone.addEventListener('dragover',  e => { e.preventDefault(); });
-adjDropZone.addEventListener('dragleave', () => { if (--_adjDragDepth <= 0) { _adjDragDepth = 0; adjDropZone.classList.remove('over'); } });
-adjDropZone.addEventListener('drop', async e => {
-  e.preventDefault();
-  e.stopPropagation();
-  _adjDragDepth = 0;
-  adjDropZone.classList.remove('over');
-  const entries  = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
-  const fallback = [...e.dataTransfer.files];
-  const files = entries.length ? await processEntries(entries, ADJ_EXTS) : fallback;
-  handleAdjFiles(files.length ? files : fallback);
-});
 
 function handleAdjFiles(files) {
   for (const f of files) {
@@ -897,9 +892,52 @@ function showToast(msg, isError = false) {
   _toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
 }
 
-// ── 全域攔截：防止瀏覽器對拖放執行預設「開啟/瀏覽」行為 ─────────────────────
-document.addEventListener('dragover', e => e.preventDefault());
-document.addEventListener('drop',     e => e.preventDefault());
+// ── 全頁拖放：window capture phase，確保第一個拿到事件 ──────────────────────
+let _pageDragDepth = 0;
+
+window.addEventListener('dragenter', e => {
+  if (!e.dataTransfer?.types?.includes('Files')) return;
+  _pageDragDepth++;
+  (activeTab === 'fit' ? dropZone : adjDropZone).classList.add('over');
+}, { capture: true, passive: false });
+
+window.addEventListener('dragleave', () => {
+  if (--_pageDragDepth <= 0) {
+    _pageDragDepth = 0;
+    dropZone.classList.remove('over');
+    adjDropZone.classList.remove('over');
+  }
+}, { capture: true, passive: false });
+
+window.addEventListener('drop', async e => {
+  // bubble phase — 頭部腳本 capture 已呼叫 preventDefault() 擋掉瀏覽器導航
+  _pageDragDepth = 0;
+  dropZone.classList.remove('over');
+  adjDropZone.classList.remove('over');
+
+  const itemsArr = [...(e.dataTransfer?.items || [])];
+  const filesArr = [...(e.dataTransfer?.files || [])];
+  const entries  = itemsArr.map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+
+  if (!itemsArr.length && !filesArr.length) {
+    showToast('未收到任何檔案', true); return;
+  }
+
+  const exts    = activeTab === 'fit' ? FIT_EXTS : ADJ_EXTS;
+  const handler = activeTab === 'fit' ? handleFitFiles : handleAdjFiles;
+  const missing = activeTab === 'fit' ? 'D14/D2C/D2D/D2B' : 'COA/BNP/PAR';
+
+  let files;
+  if (entries.length) {
+    try { files = await processEntries(entries, exts); }
+    catch (err) { showToast('目錄讀取錯誤：' + err.message, true); return; }
+  } else {
+    files = filesArr.filter(f => exts.includes(f.name.split('.').pop().toUpperCase()));
+  }
+
+  if (files.length) handler(files);
+  else showToast(`未找到 ${missing} 檔案`, true);
+}, { capture: false });
 
 // ── 調整模組：工具列按鈕 ───────────────────────────────────────────────────────
 document.getElementById('btn-adj-chk-all').onclick = () => {
