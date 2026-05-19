@@ -42,11 +42,12 @@
       <!-- 上傳 -->
       <div class="section">
         <h3>上傳 KC 地籍資料</h3>
-        <div id="drop-zone">
+        <label id="drop-zone" for="file-input">
           <div class="icon">📂</div>
-          拖放資料夾，或點擊選取資料夾<br>
+          拖放檔案或整個資料夾，或點擊選取<br>
           <span style="font-size:.85rem;color:var(--muted)">D14 · D2C · D2D · D2B</span>
-        </div>
+        </label>
+        <input id="file-input" type="file" multiple style="position:fixed;top:-200px;left:-200px;opacity:0;width:1px;height:1px">
         <div id="file-list" style="margin-top:8px"></div>
         <div class="progress-wrap" id="fit-progress"><div class="progress-bar"></div></div>
         <button id="btn-upload" class="btn btn-primary" style="margin-top:8px" disabled>解析並顯示</button>
@@ -127,11 +128,12 @@
       <!-- 上傳 -->
       <div class="section">
         <h3>上傳地籍調整資料</h3>
-        <div id="adj-drop-zone">
+        <label id="adj-drop-zone" for="adj-file-input">
           <div class="icon">📂</div>
-          拖放資料夾，或點擊選取資料夾<br>
+          拖放檔案或整個資料夾，或點擊選取<br>
           <span style="font-size:.85rem;color:var(--muted)">COA · BNP · PAR</span>
-        </div>
+        </label>
+        <input id="adj-file-input" type="file" multiple style="position:fixed;top:-200px;left:-200px;opacity:0;width:1px;height:1px">
         <div id="adj-file-list" style="margin-top:8px"></div>
         <div style="font-size:.85rem;color:var(--muted);margin-top:4px">或從套圖模組帶入</div>
         <div id="adj-from-fit" style="display:none;font-size:.85rem;color:var(--purple);margin-top:4px">✓ 已從套圖模組帶入資料</div>
