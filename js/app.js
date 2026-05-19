@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   CadastralWorkbench  app.js  v0.2
+   CadastralWorkbench  app.js  v0.3
    純前端：Pyodide Worker + Canvas 渲染（移植自 fit-cadastral webapp）
    ══════════════════════════════════════════════════════════════════════════ */
 

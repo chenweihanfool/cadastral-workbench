@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CadastralWorkbench</title>
 <link rel="stylesheet" href="css/style.css">
+<script src="js/version.js"></script>
 <script>
 /* 頁面最早期就攔截，防止瀏覽器把拖放的資料夾當成導航目標 */
 ['dragover','dragenter','drop'].forEach(function(evt) {
@@ -18,7 +19,7 @@
 <header>
   <span style="font-size:1.3rem">⚡</span>
   <h1>CadastralWorkbench</h1>
-  <span class="badge">v0.2</span>
+  <span class="badge" id="app-version">v0.3</span>
   <div class="spacer"></div>
   <button id="btn-download">⬇ 下載結果</button>
 </header>
