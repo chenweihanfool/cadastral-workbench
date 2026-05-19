@@ -1,9 +1,9 @@
 run = "python main.py"
 entrypoint = "main.py"
-modules = ["python-3.11:v25-1"]
+modules = ["nodejs-20", "python-3.12", "web", "nix"]
 
 [nix]
-channel = "stable-24_05"
+channel = "stable-25_05"
 
 [[ports]]
 localPort = 8080
