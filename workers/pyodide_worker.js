@@ -87,6 +87,7 @@ self.onmessage = async (e) => {
       // ── ADJUST: run adjustment ────────────────────────────────────────────
       case 'adj_run': {
         pyodide.globals.set('target_keys_json', JSON.stringify(payload.targetKeys || []));
+        pyodide.globals.set('max_shift_json',   JSON.stringify(payload.maxShiftM !== undefined ? payload.maxShiftM : 0.30));
         pyodide.globals.set('adj_mode', 'adjust');
         pyodide.runPython(adjScript);
         const result = JSON.parse(pyodide.globals.get('result_json'));

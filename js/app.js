@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   CadastralWorkbench  app.js  v0.3
+   CadastralWorkbench  app.js  v0.4
    純前端：Pyodide Worker + Canvas 渲染（移植自 fit-cadastral webapp）
    ══════════════════════════════════════════════════════════════════════════ */
 
@@ -741,9 +741,9 @@ function renderAdjParcelList(parcels) {
   list.innerHTML = items.map(p => `
     <div class="parcel-row exceeds">
       <div class="status-dot"></div>
-      <input type="checkbox" id="chk-${p.main}-${p.sub}" checked>
+      <input type="checkbox" id="chk-${p.main}-${p.sub}">
       <label for="chk-${p.main}-${p.sub}">${p.label}</label>
-      <span style="margin-left:auto;color:var(--muted);font-size:.7rem">差${p.diff.toFixed(0)} m²/限${p.tol.toFixed(0)}</span>
+      <span style="margin-left:auto;color:var(--muted);font-size:.7rem">差${p.diff.toFixed(0)} m²/公差${p.tol.toFixed(0)}</span>
     </div>`).join('');
 }
 
@@ -753,9 +753,12 @@ document.getElementById('btn-adj-run').onclick = () => {
     const chk = document.getElementById(`chk-${p.main}-${p.sub}`);
     return chk && chk.checked;
   }).map(p => [p.main, p.sub]);
+  if (!checked.length) { showToast('請先勾選要調整的宗地', true); return; }
+  const slider   = document.getElementById('max-shift-slider');
+  const maxShiftM = (slider ? parseInt(slider.value, 10) : 30) / 100;
   setBtn('btn-adj-run', true, '計算中…');
   progressShow('adj-progress');
-  worker.postMessage({ type: 'adj_run', payload: { targetKeys: checked } });
+  worker.postMessage({ type: 'adj_run', payload: { targetKeys: checked, maxShiftM } });
 };
 
 function onAdjResult(result) {
@@ -873,6 +876,23 @@ function showToast(msg, isError = false) {
 // ── 全域攔截：防止瀏覽器對拖放執行預設「開啟/瀏覽」行為 ─────────────────────
 document.addEventListener('dragover', e => e.preventDefault());
 document.addEventListener('drop',     e => e.preventDefault());
+
+// ── 調整模組：工具列按鈕 ───────────────────────────────────────────────────────
+document.getElementById('btn-adj-chk-all').onclick = () => {
+  document.querySelectorAll('#adj-parcel-list input[type=checkbox]').forEach(cb => { cb.checked = true; });
+};
+document.getElementById('btn-adj-chk-none').onclick = () => {
+  document.querySelectorAll('#adj-parcel-list input[type=checkbox]').forEach(cb => { cb.checked = false; });
+};
+
+// ── 最大調整幅度滑桿 ──────────────────────────────────────────────────────────
+(function () {
+  const slider = document.getElementById('max-shift-slider');
+  const label  = document.getElementById('max-shift-val');
+  if (slider && label) {
+    slider.oninput = () => { label.textContent = slider.value + ' cm'; };
+  }
+})();
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 resizeCanvas();

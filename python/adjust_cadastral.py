@@ -97,7 +97,12 @@ def _centroid(coords):
     return sum(c[0] for c in coords)/len(coords), sum(c[1] for c in coords)/len(coords)
 
 # ── 調整（directed / scale fallback）──────────────────────────────────────
-def _adjust(coords, point_ids, target_area, pt_index, key):
+def _adjust(coords, point_ids, target_area, pt_index, key, max_shift=0.30):
+    """
+    max_shift: 每個界址點最大允許位移量（公尺），預設 0.30 m。
+    directed 模式：限制二分搜索範圍在 ±max_shift 內。
+    uniform_scale 模式：限制縮放比例使最大位移 ≤ max_shift。
+    """
     target_set = {key}
     movable = []
     for pid in point_ids:
@@ -131,7 +136,8 @@ def _adjust(coords, point_ids, target_area, pt_index, key):
                 shift_vecs.append((0.0, 0.0))
 
         cur = _area(coords)
-        lo, hi = (0.0, 5.0) if cur < target_area else (-5.0, 0.0)
+        # 以 max_shift 限制二分搜索上界
+        lo, hi = (0.0, max_shift) if cur < target_area else (-max_shift, 0.0)
         for _ in range(60):
             mid = (lo+hi)/2
             a = _area([(y+mid*sv[0], x+mid*sv[1]) for (y,x),sv in zip(coords,shift_vecs)])
@@ -147,8 +153,17 @@ def _adjust(coords, point_ids, target_area, pt_index, key):
         if cur == 0: return coords, 0.0, 'uniform_scale'
         k = math.sqrt(target_area/cur)
         cy_, cx_ = _centroid(coords)
+        # 限制縮放比例：最大位移 ≤ max_shift
+        if max_shift > 0:
+            dists = [math.sqrt((y-cy_)**2+(x-cx_)**2) for y,x in coords]
+            max_d_c = max(dists) if dists else 0.0
+            if max_d_c > 0:
+                if k > 1.0:
+                    k = min(k, 1.0 + max_shift / max_d_c)
+                else:
+                    k = max(k, 1.0 - max_shift / max_d_c)
         new_c = [(cy_+k*(y-cy_), cx_+k*(x-cx_)) for y,x in coords]
-        max_d = max(math.sqrt((ny-y)**2+(nx-x)**2) for (y,x),(ny,nx) in zip(coords,new_c))
+        max_d = max(math.sqrt((ny-y)**2+(nx-x)**2) for (y,x),(ny,nx) in zip(coords,new_c)) if new_c else 0.0
         return new_c, max_d*100, 'uniform_scale'
 
 # ── 讀取 bytes ──────────────────────────────────────────────────────────────
@@ -198,6 +213,12 @@ if adj_mode == 'parse':  # noqa: F821
 # ════════════════════════════════════════════════════════════════════════════
 elif adj_mode == 'adjust':  # noqa: F821
     target_keys = [tuple(k) for k in json.loads(target_keys_json)]  # noqa: F821
+    # 讀取最大調整幅度（公尺），未傳入時預設 0.30 m
+    try:
+        _max_shift_m = float(json.loads(max_shift_json))  # noqa: F821
+    except Exception:
+        _max_shift_m = 0.30
+
     if not target_keys:
         # adjust all that exceed tolerance
         target_keys = [
@@ -224,7 +245,7 @@ elif adj_mode == 'adjust':  # noqa: F821
         tol_   = _tolerance(reg_)
         if abs(diff_b) <= tol_: continue
         target_area_ = reg_ - math.copysign(tol_ * TARGET_FRACTION, diff_b)
-        new_c, max_cm, mode_ = _adjust(coords_b, pids, target_area_, pt_index, key_)
+        new_c, max_cm, mode_ = _adjust(coords_b, pids, target_area_, pt_index, key_, max_shift=_max_shift_m)
         area_a = _area(new_c)
         diff_a = reg_ - area_a
         for pid, (ny, nx) in zip(pids, new_c):
