@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   CadastralWorkbench  app.js  v0.4
+   CadastralWorkbench  app.js  v0.5
    純前端：Pyodide Worker + Canvas 渲染（移植自 fit-cadastral webapp）
    ══════════════════════════════════════════════════════════════════════════ */
 
@@ -768,14 +768,38 @@ function onAdjResult(result) {
   ADJ.coaText = result.coa_text;
 
   const list = document.getElementById('adj-result-list');
-  list.innerHTML = result.adjusted_parcels.map(p => {
+  list.innerHTML = result.adjusted_parcels.map((p, idx) => {
     const statusColor = p.status === 'ok' ? 'var(--green)' : 'var(--red)';
     return `<div style="border-bottom:1px solid #1e2030;padding:4px 0">
-      <b>${p.label}</b> — 最大位移 ${p.max_shift_cm.toFixed(1)} cm (${p.mode})<br>
-      面積差 ${p.diff_before.toFixed(2)} → <span style="color:${statusColor}">${p.diff_after.toFixed(2)}</span> m²
-      (限 ±${p.tol.toFixed(2)} m²)
+      <div style="display:flex;align-items:flex-start;gap:6px">
+        <div style="flex:1;min-width:0;font-size:.88rem;line-height:1.8">
+          <b>${p.label}</b> — 最大位移 ${p.max_shift_cm.toFixed(1)} cm (${p.mode})<br>
+          面積差 ${p.diff_before.toFixed(2)} → <span style="color:${statusColor}">${p.diff_after.toFixed(2)}</span> m²
+          (公差 ±${p.tol.toFixed(2)} m²)
+        </div>
+        <button class="btn-tiny btn-dxf-dl" data-idx="${idx}"
+                title="下載 DXF（調整前紅 / 調整後綠）"
+                style="flex-shrink:0;margin-top:3px">📐 DXF</button>
+      </div>
     </div>`;
   }).join('');
+
+  /* ── per-parcel DXF download ── */
+  list.querySelectorAll('.btn-dxf-dl').forEach(btn => {
+    btn.onclick = () => {
+      const p = ADJ.result.adjusted_parcels[parseInt(btn.dataset.idx, 10)];
+      if (!p) return;
+      const dxf  = writeParcelDXF(p);
+      if (!dxf)  { showToast('DXF 產生失敗：缺少座標資料', true); return; }
+      const blob = new Blob([dxf], { type: 'application/dxf' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = `adj_${p.label}.dxf`; a.click();
+      URL.revokeObjectURL(url);
+      showToast(`已下載：adj_${p.label}.dxf`);
+    };
+  });
+
   document.getElementById('adj-result-section').style.display = '';
   document.getElementById('btn-adj-gpkg').style.display = '';
   document.getElementById('btn-adj-coa').style.display  = '';

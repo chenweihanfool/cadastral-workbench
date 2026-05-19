@@ -1,8 +1,16 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.4';
+window.CW_VERSION = '0.5';
 window.CW_BUILD   = '2026-05-19';
 
 window.CW_CHANGELOG = [
+  {
+    version: '0.5', date: '2026-05-19',
+    notes: [
+      '調整結果每筆宗地新增「📐 DXF」下載按鈕（單筆輸出）',
+      'DXF 格式：AC1015 (R2000)，含 ADJ_BEFORE（紅）/ ADJ_AFTER（綠）/ LABEL 三個圖層',
+      '座標系統：TWD97 (EPSG:3826)，單位公尺',
+    ],
+  },
   {
     version: '0.4', date: '2026-05-19',
     notes: [
