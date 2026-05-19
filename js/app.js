@@ -263,7 +263,7 @@ function drawPolygon(coords, strokeColor, lineWidth, fill = true) {
   if (!coords || coords.length < 2) return;
   ctx.beginPath();
   for (let i = 0; i < coords.length; i++) {
-    const [sy, sx] = worldToScreen(coords[i][0], coords[i][1]);
+    const [sx, sy] = worldToScreen(coords[i][0], coords[i][1]);
     if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
   }
   ctx.closePath();
