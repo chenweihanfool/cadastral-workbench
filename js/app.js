@@ -1172,9 +1172,12 @@ function enterManualMode() {
   MANUAL.hover      = null;
   MANUAL.step       = parseFloat(document.getElementById('manual-step')?.value ?? '0.01');
 
-  document.getElementById('manual-toolbar').style.display = 'flex';
-  document.getElementById('hint').style.display           = 'none';
-  document.getElementById('manual-sel-info').textContent  = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
+  const tb = document.getElementById('manual-toolbar');
+  if (tb) tb.style.display = 'flex';
+  const ht = document.getElementById('hint');
+  if (ht) ht.style.display = 'none';
+  const si = document.getElementById('manual-sel-info');
+  if (si) si.textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
   render();
 }
 
@@ -1199,8 +1202,10 @@ function exitManualMode(apply) {
   MANUAL.selections = [];
   MANUAL.history    = [];
   MANUAL.hover      = null;
-  document.getElementById('manual-toolbar').style.display = 'none';
-  document.getElementById('hint').style.display           = '';
+  const tb2 = document.getElementById('manual-toolbar');
+  if (tb2) tb2.style.display = 'none';
+  const ht2 = document.getElementById('hint');
+  if (ht2) ht2.style.display = '';
   canvas.style.cursor = 'grab';
   render();
 }
@@ -1462,31 +1467,24 @@ function renderAdjManual(W, H) {
   }
 }
 
-// ── 手動工具列事件 ───────────────────────────────────────────────────────────
-document.getElementById('btn-manual-adj').onclick = () => {
-  if (ADJ.result) enterManualMode();
-};
+// ── 手動工具列事件（null-safe：舊版快取 HTML 缺少元素時不會 crash） ──────────
+function _on(id, fn) { const b = document.getElementById(id); if (b) b.onclick = fn; }
 
-document.getElementById('btn-manual-step') && (document.getElementById('manual-step').onchange = e => {
-  MANUAL.step = parseFloat(e.target.value);
-});
-
-document.getElementById('btn-manual-undo').onclick   = () => undoManual();
-document.getElementById('btn-manual-origin').onclick = () => resetToOriginalCoords();
-
-document.getElementById('btn-manual-reset').onclick = () => {
+_on('btn-manual-adj',     () => { if (ADJ.result) enterManualMode(); });
+_on('btn-manual-undo',    () => undoManual());
+_on('btn-manual-origin',  () => resetToOriginalCoords());
+_on('btn-manual-reset',   () => {
   initManualCoords();
   MANUAL.selections = [];
   MANUAL.history    = [];
-  document.getElementById('manual-sel-info').textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
+  const si = document.getElementById('manual-sel-info');
+  if (si) si.textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
   render();
   showToast('已重設為自動調整結果');
-};
+});
+_on('btn-manual-confirm', () => exitManualMode(true));
+_on('btn-manual-exit',    () => exitManualMode(false));
 
-document.getElementById('btn-manual-confirm').onclick = () => exitManualMode(true);
-document.getElementById('btn-manual-exit').onclick    = () => exitManualMode(false);
-
-// step select
 (function () {
   const sel = document.getElementById('manual-step');
   if (sel) sel.onchange = () => { MANUAL.step = parseFloat(sel.value); };
