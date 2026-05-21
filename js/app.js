@@ -174,8 +174,10 @@ function renderBasemap() {
   // Tile range
   const tileSW = latLonToTile(llSW.lat, llSW.lon, z);
   const tileNE = latLonToTile(llNE.lat, llNE.lon, z);
-  const txMin = Math.max(0, tileNE.x - 1);
-  const txMax = Math.min(Math.pow(2, z) - 1, tileSW.x + 1);
+  // tile x increases eastward  → SW has smaller x, NE has larger x
+  // tile y increases southward → NE has smaller y, SW has larger y
+  const txMin = Math.max(0, tileSW.x - 1);
+  const txMax = Math.min(Math.pow(2, z) - 1, tileNE.x + 1);
   const tyMin = Math.max(0, tileNE.y - 1);
   const tyMax = Math.min(Math.pow(2, z) - 1, tileSW.y + 1);
 
