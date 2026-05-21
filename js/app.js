@@ -3,6 +3,21 @@
    純前端：Pyodide Worker + Canvas 渲染
    ══════════════════════════════════════════════════════════════════════════ */
 
+// ── proj4 投影定義 (TWD67/EPSG:3828 → TWD97/EPSG:3826) ──────────────────────
+// 參數來源：國土測繪中心，與 ka-tool 相同
+proj4.defs('EPSG:3828',
+  '+proj=tmerc +lat_0=0 +lon_0=121 +k=0.9999 +x_0=250000 +y_0=0' +
+  ' +ellps=GRS67 +towgs84=-750.739,-359.515,-180.510,0,0,0,0 +units=m +no_defs');
+proj4.defs('EPSG:3826',
+  '+proj=tmerc +lat_0=0 +lon_0=121 +k=0.9999 +x_0=250000 +y_0=0' +
+  ' +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs');
+
+// twd67TM2 → twd97TM2：輸入/輸出都是 [N, E]（northing, easting）
+function convertTwd67To97(N, E) {
+  const [e97, n97] = proj4('EPSG:3828', 'EPSG:3826', [E, N]);
+  return [n97, e97];
+}
+
 // ── 全域狀態 ─────────────────────────────────────────────────────────────────
 const FIT = {
   data:       null,   // parse 結果（segments / ref_pts / boundary_pts / cy / cx）
@@ -789,9 +804,7 @@ worker.onmessage = (e) => {
     case 'adj_run_result':
       onAdjResult(payload);
       break;
-    case 'crs_result':
-      onCrsResult(payload);
-      break;
+    // crs_result no longer used — conversion done directly via proj4.js
     case 'error':
       showToast('錯誤：' + payload, true);
       progressHide('fit-progress');
@@ -1175,172 +1188,105 @@ document.getElementById('btn-adj-gpkg').onclick = async () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  CRS MODULE (TWD67 → TWD97)
+//  CRS MODULE (TWD67 → TWD97)  ── 直接用 proj4.js，不走 Pyodide worker
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// 統一入口：source = 'fit' | 'adj'（由呼叫方決定）
 function startCrsConvert(source) {
   if (source === 'adj') {
     if (!ADJ.data) { showToast('請先載入調整資料', true); return; }
     if (ADJ.crsIsWGS97) { showToast('已是 TWD97 座標，無需重複轉換'); return; }
-
-    // 收集 ADJ 所有宗地座標（唯一點）
-    const ptMap = new Map();
-    for (const parcel of ADJ.data.parcels) {
-      for (const [y, x] of (parcel.coords || [])) {
-        const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
-        ptMap.set(key, [y, x]);
-      }
-    }
-    const pts = [...ptMap.values()];
-    setBtn('btn-crs-convert', true, '轉換中…');
-    progressShow('crs-progress');
-    worker.postMessage({ type: 'crs_convert', payload: { pts, source: 'adj' } });
-
+    _applyCrsAdj();
   } else {
-    // source === 'fit'
     if (!FIT.data) { showToast('請先載入套圖資料', true); return; }
     if (FIT.crsIsWGS97) { showToast('已是 TWD97 座標，無需重複轉換'); return; }
-
-    const ptMap = new Map();
-    for (const p of FIT.data.ref_pts) {
-      const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-      ptMap.set(key, [p.y, p.x]);
-    }
-    for (const p of FIT.data.boundary_pts) {
-      const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-      ptMap.set(key, [p.y, p.x]);
-    }
-    for (const [y1, x1, y2, x2] of FIT.data.segments) {
-      ptMap.set(`${y1.toFixed(6)}:${x1.toFixed(6)}`, [y1, x1]);
-      ptMap.set(`${y2.toFixed(6)}:${x2.toFixed(6)}`, [y2, x2]);
-    }
-    const pts = [...ptMap.values()];
-    setBtn('btn-crs-convert', true, '轉換中…');
-    progressShow('crs-progress');
-    worker.postMessage({ type: 'crs_convert', payload: { pts, source: 'fit' } });
+    _applyCrsFit();
   }
 }
 
-document.getElementById('btn-crs-convert').onclick = () => {
-  // 側邊欄按鈕：依目前畫布模組決定轉換對象
-  startCrsConvert(activeTab === 'adj' ? 'adj' : 'fit');
-};
+function _applyCrsFit() {
+  // ── build unique-point lookup ──────────────────────────────────────────────
+  const convMap = new Map();
+  const _conv = (y, x) => {
+    const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
+    if (!convMap.has(key)) {
+      const [n97, e97] = convertTwd67To97(y, x);
+      convMap.set(key, [n97, e97]);
+    }
+    return convMap.get(key);
+  };
 
-// 輔助：從 result.pts（同順序陣列）建立 lookup map
-function _buildConvMap(orderedKeys, resultPts) {
-  const m = new Map();
-  resultPts.forEach(([N97, E97], i) => m.set(orderedKeys[i], [N97, E97]));
-  return m;
+  let sumDn = 0, sumDe = 0, cnt = 0;
+  for (const p of FIT.data.ref_pts) {
+    const [n97, e97] = _conv(p.y, p.x);
+    sumDn += n97 - p.y; sumDe += e97 - p.x; cnt++;
+    p.y = n97; p.x = e97;
+  }
+  for (const p of FIT.data.boundary_pts) {
+    const [n97, e97] = _conv(p.y, p.x);
+    p.y = n97; p.x = e97;
+  }
+  FIT.data.segments = FIT.data.segments.map(([y1, x1, y2, x2]) => {
+    const c1 = _conv(y1, x1);
+    const c2 = _conv(y2, x2);
+    return [c1[0], c1[1], c2[0], c2[1]];
+  });
+
+  const allY = [], allX = [];
+  for (const [y1,x1,y2,x2] of FIT.data.segments) { allY.push(y1,y2); allX.push(x1,x2); }
+  for (const p of FIT.data.ref_pts)      { allY.push(p.y); allX.push(p.x); }
+  for (const p of FIT.data.boundary_pts) { allY.push(p.y); allX.push(p.x); }
+  const pad = (Math.max(...allY) - Math.min(...allY)) * 0.05;
+  extents = { minY: Math.min(...allY)-pad, maxY: Math.max(...allY)+pad,
+              minX: Math.min(...allX)-pad, maxX: Math.max(...allX)+pad };
+
+  FIT.crsIsWGS97 = true;
+  FIT.result = null;
+  _finishCrs(sumDn/cnt, sumDe/cnt, cnt);
 }
 
-function onCrsResult(result) {
-  progressHide('crs-progress');
-  setBtn('btn-crs-convert', false, '🔄 一鍵轉 TWD97');
-
-  if (result.source === 'adj') {
-    // ── 調整模組 CRS 套用 ────────────────────────────────────────────────────
-    if (!ADJ.data) return;
-
-    // 重建同順序 keys（與 startCrsConvert 的收集順序一致）
-    const ptMap = new Map();
-    const orderedKeys = [];
-    for (const parcel of ADJ.data.parcels) {
-      for (const [y, x] of (parcel.coords || [])) {
-        const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
-        if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
-      }
+function _applyCrsAdj() {
+  const convMap = new Map();
+  const _conv = (y, x) => {
+    const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
+    if (!convMap.has(key)) {
+      const [n97, e97] = convertTwd67To97(y, x);
+      convMap.set(key, [n97, e97]);
     }
-    const convMap = _buildConvMap(orderedKeys, result.pts);
+    return convMap.get(key);
+  };
 
-    // 套用到每個宗地座標
-    for (const parcel of ADJ.data.parcels) {
-      parcel.coords = parcel.coords.map(([y, x]) => {
-        const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
-        const c = convMap.get(key);
-        return c ? [c[0], c[1]] : [y, x];
-      });
-    }
-    // 若有調整後結果，也一併轉換
-    if (ADJ.result) {
-      for (const p of ADJ.result.adjusted_parcels) {
-        const applyCoords = (arr) => arr.map(([y, x]) => {
-          const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
-          const c = convMap.get(key);
-          return c ? [c[0], c[1]] : [y, x];
-        });
-        if (p.coords_before) p.coords_before = applyCoords(p.coords_before);
-        if (p.coords_after)  p.coords_after  = applyCoords(p.coords_after);
-      }
-    }
-
-    // 重算 extents
-    const allY = [], allX = [];
-    for (const parcel of ADJ.data.parcels)
-      for (const [y, x] of parcel.coords) { allY.push(y); allX.push(x); }
-    const pad2 = (Math.max(...allY) - Math.min(...allY)) * 0.05;
-    extents = {
-      minY: Math.min(...allY) - pad2, maxY: Math.max(...allY) + pad2,
-      minX: Math.min(...allX) - pad2, maxX: Math.max(...allX) + pad2,
-    };
-
-    ADJ.crsIsWGS97 = true;
-
-  } else {
-    // ── 套圖模組 CRS 套用 ────────────────────────────────────────────────────
-    if (!FIT.data) return;
-
-    const ptMap = new Map();
-    const orderedKeys = [];
-    for (const p of FIT.data.ref_pts) {
-      const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-      if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
-    }
-    for (const p of FIT.data.boundary_pts) {
-      const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-      if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
-    }
-    for (const [y1, x1, y2, x2] of FIT.data.segments) {
-      for (const [y, x] of [[y1,x1],[y2,x2]]) {
-        const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
-        if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
-      }
-    }
-    const convMap = _buildConvMap(orderedKeys, result.pts);
-
-    for (const p of FIT.data.ref_pts) {
-      const conv = convMap.get(`${p.y.toFixed(6)}:${p.x.toFixed(6)}`);
-      if (conv) { p.y = conv[0]; p.x = conv[1]; }
-    }
-    for (const p of FIT.data.boundary_pts) {
-      const conv = convMap.get(`${p.y.toFixed(6)}:${p.x.toFixed(6)}`);
-      if (conv) { p.y = conv[0]; p.x = conv[1]; }
-    }
-    FIT.data.segments = FIT.data.segments.map(([y1, x1, y2, x2]) => {
-      const c1 = convMap.get(`${y1.toFixed(6)}:${x1.toFixed(6)}`) || [y1, x1];
-      const c2 = convMap.get(`${y2.toFixed(6)}:${x2.toFixed(6)}`) || [y2, x2];
-      return [c1[0], c1[1], c2[0], c2[1]];
+  let sumDn = 0, sumDe = 0, cnt = 0;
+  for (const parcel of ADJ.data.parcels) {
+    parcel.coords = parcel.coords.map(([y, x]) => {
+      const [n97, e97] = _conv(y, x);
+      sumDn += n97 - y; sumDe += e97 - x; cnt++;
+      return [n97, e97];
     });
-
-    const allY = [], allX = [];
-    for (const [y1, x1, y2, x2] of FIT.data.segments) { allY.push(y1, y2); allX.push(x1, x2); }
-    for (const p of FIT.data.ref_pts)      { allY.push(p.y); allX.push(p.x); }
-    for (const p of FIT.data.boundary_pts) { allY.push(p.y); allX.push(p.x); }
-    const pad = (Math.max(...allY) - Math.min(...allY)) * 0.05;
-    extents = {
-      minY: Math.min(...allY) - pad, maxY: Math.max(...allY) + pad,
-      minX: Math.min(...allX) - pad, maxX: Math.max(...allX) + pad,
-    };
-
-    FIT.crsIsWGS97 = true;
-    FIT.result = null; // Clear fit result since coords changed
+  }
+  if (ADJ.result) {
+    const applyArr = arr => arr.map(([y, x]) => _conv(y, x));
+    for (const p of ADJ.result.adjusted_parcels) {
+      if (p.coords_before) p.coords_before = applyArr(p.coords_before);
+      if (p.coords_after)  p.coords_after  = applyArr(p.coords_after);
+    }
   }
 
-  // ── 共用 UI 更新 ─────────────────────────────────────────────────────────
+  const allY = [], allX = [];
+  for (const parcel of ADJ.data.parcels)
+    for (const [y, x] of parcel.coords) { allY.push(y); allX.push(x); }
+  const pad2 = (Math.max(...allY) - Math.min(...allY)) * 0.05;
+  extents = { minY: Math.min(...allY)-pad2, maxY: Math.max(...allY)+pad2,
+              minX: Math.min(...allX)-pad2, maxX: Math.max(...allX)+pad2 };
+
+  ADJ.crsIsWGS97 = true;
+  _finishCrs(sumDn/cnt, sumDe/cnt, cnt);
+}
+
+function _finishCrs(meanDn, meanDe, count) {
   const resEl = document.getElementById('crs-result-section');
-  document.getElementById('crs-dn').textContent    = (result.mean_dn >= 0 ? '+' : '') + result.mean_dn.toFixed(3) + ' m';
-  document.getElementById('crs-de').textContent    = (result.mean_de >= 0 ? '+' : '') + result.mean_de.toFixed(3) + ' m';
-  document.getElementById('crs-count').textContent = result.pts.length + ' 點';
+  document.getElementById('crs-dn').textContent    = (meanDn >= 0 ? '+' : '') + meanDn.toFixed(3) + ' m';
+  document.getElementById('crs-de').textContent    = (meanDe >= 0 ? '+' : '') + meanDe.toFixed(3) + ' m';
+  document.getElementById('crs-count').textContent = count + ' 點';
   resEl.style.display = '';
 
   const badge = document.getElementById('crs-from-badge');
@@ -1349,10 +1295,15 @@ function onCrsResult(result) {
   const quickBtn = document.getElementById('btn-crs-quick');
   if (quickBtn) { quickBtn.disabled = true; quickBtn.title = '已是 TWD97 座標'; }
 
+  setBtn('btn-crs-convert', false, '🔄 一鍵轉 TWD97');
   updateBasemapCrsWarn();
   resizeCanvas(); initView(); render();
   showToast('TWD67→TWD97 轉換完成');
 }
+
+document.getElementById('btn-crs-convert').onclick = () => {
+  startCrsConvert(activeTab === 'adj' ? 'adj' : 'fit');
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  BASEMAP MODULE
