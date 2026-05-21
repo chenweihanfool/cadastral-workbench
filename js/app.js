@@ -33,7 +33,7 @@ const MANUAL = {
   history:    [],          // undo stack：每次移動前 push coords 快照（最多 80 步）
 };
 
-const BASEMAP = { visible: false, opacity: 70, provider: 'google-satellite' };
+const BASEMAP = { visible: false, opacity: 70, provider: 'google-hybrid' };
 
 const TILE_PROVIDERS = {
   // Google (unofficial tile URLs — widely used in GIS but against Google ToS)
