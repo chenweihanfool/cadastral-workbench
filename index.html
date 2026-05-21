@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CadastralWorkbench</title>
-<link rel="stylesheet" href="css/style.css?v=0.9">
-<script src="js/version.js?v=0.9"></script>
+<link rel="stylesheet" href="css/style.css?v=0.9.1">
+<script src="js/version.js?v=0.9.1"></script>
 <script>
 /* 頁面最早期就攔截，防止瀏覽器把拖放的資料夾當成導航目標 */
 ['dragover','dragenter','drop'].forEach(function(evt) {
@@ -32,15 +32,12 @@
   <!-- Module tabs (left) -->
   <button class="tb-btn active" data-tab="fit">📐 套圖</button>
   <button class="tb-btn"        data-tab="adj">📏 調整</button>
-  <button class="tb-btn"        data-tab="crs">🔄 TWD97</button>
-  <button class="tb-btn"        data-tab="basemap">🗺 底圖</button>
 
   <div class="tb-sep"></div>
 
   <!-- Action buttons (right) -->
   <button id="btn-download" class="tb-action-btn" style="display:none">⬇ 下載</button>
   <button id="btn-fit-gpkg" class="tb-action-btn tb-action-green" style="display:none">📦 GPKG</button>
-  <button class="tb-action-btn" id="btn-changelog">📋 日誌</button>
 </div>
 
 <!-- ── Workspace ─────────────────────────────────────────────────────────────── -->
@@ -281,6 +278,9 @@
     <div id="tooltip"></div>
 
     <div class="zoom-btns">
+      <button class="zoom-btn" id="btn-basemap-quick" title="切換底圖顯示">🗺</button>
+      <button class="zoom-btn" id="btn-crs-quick" title="一鍵轉 TWD97" disabled>🔄</button>
+      <div class="zoom-sep"></div>
       <button class="zoom-btn" id="btn-zoom-in">＋</button>
       <button class="zoom-btn" id="btn-zoom-fit">⊙</button>
       <button class="zoom-btn" id="btn-zoom-out">－</button>
@@ -334,8 +334,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="js/gpkg_writer.js?v=0.9"></script>
-<script src="js/dxf_writer.js?v=0.9"></script>
-<script src="js/app.js?v=0.9"></script>
+<script src="js/gpkg_writer.js?v=0.9.1"></script>
+<script src="js/dxf_writer.js?v=0.9.1"></script>
+<script src="js/app.js?v=0.9.1"></script>
 </body>
 </html>

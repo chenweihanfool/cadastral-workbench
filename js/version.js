@@ -1,8 +1,25 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.8';
+window.CW_VERSION = '0.9.1';
 window.CW_BUILD   = '2026-05-21';
 
 window.CW_CHANGELOG = [
+  {
+    version: '0.9.1', date: '2026-05-21',
+    notes: [
+      'UI 優化：工具列移除 TWD97、底圖分頁標籤及日誌按鈕（減少擁擠）',
+      '🔄 轉 TWD97 與 🗺 底圖開關移至畫布右下角縮放按鈕列（載入資料後方可使用）',
+      '底圖按鈕啟用後呈綠色高亮顯示；TWD97 轉換後自動停用並標示完成',
+    ],
+  },
+  {
+    version: '0.9', date: '2026-05-21',
+    notes: [
+      'UI 全面重設計：AutoCAD 風格 — 頂部標題列 + 工具列 + 可收合側邊欄 + 狀態列',
+      '新增一鍵轉 TWD97（TWD67→TWD97 Helmert 三參數轉換，內政部公告參數）',
+      '新增 NLSC 底圖套繪：國土測繪航照圖 / 電子地圖 / OpenStreetMap，可調透明度',
+      '版本號點擊開啟開發日誌整合',
+    ],
+  },
   {
     version: '0.8', date: '2026-05-21',
     notes: [

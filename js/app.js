@@ -680,18 +680,22 @@ for (const { id, key } of _adjExtraLayers) {
   if (el) el.onchange = () => { ADJ.layers[key] = el.checked; render(); };
 }
 
-// ── 分頁切換 ─────────────────────────────────────────────────────────────────
-document.querySelectorAll('.tb-btn[data-tab]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    activeTab = btn.dataset.tab;
-    document.querySelectorAll('.tb-btn[data-tab]').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById(`tab-${activeTab}`).classList.add('active');
-    // Update basemap CRS warning
-    updateBasemapCrsWarn();
-    if (extents) { initView(); render(); } else render();
+// ── 分頁切換輔助 ─────────────────────────────────────────────────────────────
+function switchTab(tabName) {
+  activeTab = tabName;
+  // Update toolbar tab buttons (only fit/adj are in toolbar now)
+  document.querySelectorAll('.tb-btn[data-tab]').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tabName);
   });
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById(`tab-${tabName}`);
+  if (panel) panel.classList.add('active');
+  updateBasemapCrsWarn();
+  if (extents) { initView(); render(); } else render();
+}
+
+document.querySelectorAll('.tb-btn[data-tab]').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
 
 // ── Panel collapse toggle ─────────────────────────────────────────────────────
@@ -717,8 +721,25 @@ document.getElementById('btn-fit-gpkg').onclick = async () => {
   await writeFitGPKG(FIT.result, FIT.data, FIT.fileMap['D14']?.name?.replace(/\.[^.]+$/, '') || 'fit');
   showToast('GeoPackage 已下載');
 };
-document.getElementById('btn-changelog').onclick = () => {
-  openChangelog();
+// btn-changelog removed from toolbar; changelog opened via version badge click only
+
+// ── Canvas quick-action buttons ───────────────────────────────────────────────
+document.getElementById('btn-basemap-quick').onclick = () => {
+  BASEMAP.visible = !BASEMAP.visible;
+  // Sync checkbox in side panel
+  const cb = document.getElementById('basemap-visible');
+  if (cb) cb.checked = BASEMAP.visible;
+  // Highlight button when active
+  document.getElementById('btn-basemap-quick').classList.toggle('active', BASEMAP.visible);
+  // Open basemap panel so user can tweak settings
+  switchTab('basemap');
+  render();
+};
+
+document.getElementById('btn-crs-quick').onclick = () => {
+  document.getElementById('btn-crs-convert').click();
+  // Open CRS panel to show progress / result
+  switchTab('crs');
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -880,8 +901,9 @@ function onFitParsed(data) {
   updateFitStats(data.stats, null);
   document.getElementById('fit-section').style.display = '';
   setBtn('btn-fit', false, '▶ 執行套疊');
-  // Enable CRS convert button
+  // Enable CRS convert buttons (side-panel + canvas quick)
   document.getElementById('btn-crs-convert').disabled = false;
+  document.getElementById('btn-crs-quick').disabled = false;
   showToast(`解析完成：${data.stats.n_segs} 條線段、${data.stats.n_ref} 個參考點`);
   render();
 }
@@ -934,7 +956,7 @@ document.getElementById('btn-fit-send-adj').onclick = () => {
   if (!FIT.result) return;
   showToast('已切換至調整模組（尚需上傳 COA/BNP/PAR）');
   document.getElementById('adj-from-fit').style.display = '';
-  document.querySelector('[data-tab="adj"]').click();
+  switchTab('adj');
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1238,6 +1260,10 @@ function onCrsResult(result) {
   // Update from-badge
   const badge = document.getElementById('crs-from-badge');
   if (badge) { badge.textContent = 'TWD97'; badge.className = 'crs-badge twd97'; }
+
+  // Disable & visually mark quick button as done
+  const quickBtn = document.getElementById('btn-crs-quick');
+  if (quickBtn) { quickBtn.disabled = true; quickBtn.title = '已是 TWD97 座標'; }
 
   updateBasemapCrsWarn();
   resizeCanvas(); initView(); render();
