@@ -19,7 +19,7 @@
 <header>
   <span style="font-size:1.3rem">⚡</span>
   <h1>CadastralWorkbench</h1>
-  <span class="badge" id="app-version">v0.6</span>
+  <span class="badge" id="app-version">v0.7</span>
   <div class="spacer"></div>
   <button id="btn-download">⬇ 下載結果</button>
 </header>
@@ -168,6 +168,7 @@
       <div id="adj-result-section" class="section" style="display:none">
         <h3>調整結果</h3>
         <div id="adj-result-list" style="font-size:.88rem;line-height:1.8"></div>
+        <button id="btn-manual-adj" class="btn btn-secondary" style="display:none;margin-top:8px">✏️ 手動調整</button>
       </div>
 
       <!-- 調整圖層 -->
@@ -211,6 +212,25 @@
       <button class="zoom-btn" id="btn-zoom-out">－</button>
     </div>
     <div id="hint">拖曳移動 · 滾輪縮放 · 點擊參考點設定權重</div>
+
+    <!-- ── 手動調整工具列 ─────────────────────────────────────────────── -->
+    <div id="manual-toolbar" style="display:none">
+      <span class="manual-mode-lbl">✏️ 手動調整</span>
+      <span id="manual-sel-info">點擊界址點 / 邊線 / 宗地選取</span>
+      <label style="font-size:.82rem;color:var(--muted);display:flex;align-items:center;gap:4px;flex-shrink:0">
+        步長
+        <select id="manual-step">
+          <option value="0.001">1 mm</option>
+          <option value="0.005">5 mm</option>
+          <option value="0.01" selected>1 cm</option>
+          <option value="0.05">5 cm</option>
+          <option value="0.1">10 cm</option>
+        </select>
+      </label>
+      <button class="btn-tiny" id="btn-manual-reset">↺ 重設</button>
+      <button class="btn-tiny btn-manual-ok" id="btn-manual-confirm">✓ 套用</button>
+      <button class="btn-tiny" id="btn-manual-exit">✕ 離開</button>
+    </div>
   </div>
 
 </div><!-- /layout -->
@@ -228,8 +248,9 @@
   </div>
 </div>
 
-<script src="js/gpkg_writer.js?v=0.6"></script>
-<script src="js/dxf_writer.js?v=0.6"></script>
-<script src="js/app.js?v=0.6"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="js/gpkg_writer.js?v=0.7"></script>
+<script src="js/dxf_writer.js?v=0.7"></script>
+<script src="js/app.js?v=0.7"></script>
 </body>
 </html>

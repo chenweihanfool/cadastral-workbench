@@ -1,8 +1,17 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.6';
+window.CW_VERSION = '0.7';
 window.CW_BUILD   = '2026-05-21';
 
 window.CW_CHANGELOG = [
+  {
+    version: '0.7', date: '2026-05-21',
+    notes: [
+      '新增手動調整模式：自動調整後可點擊界址點 / 邊線 / 宗地，用方向鍵移動，即時顯示各地號面積差與公差',
+      '支援共用界址點同步移動（epsilon 吻合判斷）',
+      '套用後自動更新調整結果統計與顏色標示',
+      '新增 PDF 調整報告輸出：A4 示意圖含調整前後輪廓、位移向量、最大位移點標示',
+    ],
+  },
   {
     version: '0.6', date: '2026-05-21',
     notes: [

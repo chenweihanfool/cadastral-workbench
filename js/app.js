@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   CadastralWorkbench  app.js  v0.6
+   CadastralWorkbench  app.js  v0.7
    純前端：Pyodide Worker + Canvas 渲染（移植自 fit-cadastral webapp）
    ══════════════════════════════════════════════════════════════════════════ */
 
@@ -19,6 +19,15 @@ const ADJ = {
   layers:  { before: true, after: true, labels: true, regArea: false, calcArea: false, adjDiff: false, adjTol: false },
   fileMap: {},     // {COA: File, BNP: File, PAR: File}
   coaText: null,   // 調整後 COA 文字（下載用）
+};
+
+const MANUAL = {
+  active:    false,
+  step:      0.01,       // metres per arrow-key press (default 1 cm)
+  selection: null,       // { type:'point'|'edge'|'parcel', label, idx/i/j, y, x }
+  hover:     null,
+  coords:    {},         // label → [[y,x], ...]  working coordinates
+  areas:     {},         // label → { area, reg, tol, diff, ok }
 };
 
 let activeTab  = 'fit';
@@ -208,6 +217,8 @@ function renderAdj(W, H) {
     return;
   }
 
+  if (MANUAL.active) { renderAdjManual(W, H); return; }
+
   const result  = ADJ.result;
   const parcels = ADJ.data.parcels;
 
@@ -327,6 +338,18 @@ window.addEventListener('mousemove', e => {
     render();
   } else if (activeTab === 'fit' && FIT.data) {
     handleFitHover(e);
+  } else if (activeTab === 'adj' && MANUAL.active) {
+    const rect = canvas.getBoundingClientRect();
+    const newHover = hitTestManual(e.clientX - rect.left, e.clientY - rect.top);
+    const prev = MANUAL.hover;
+    const changed = (!!newHover !== !!prev) ||
+      (newHover && prev && (newHover.type !== prev.type || newHover.label !== prev.label ||
+                            newHover.idx !== prev.idx || newHover.i !== prev.i));
+    if (changed) {
+      MANUAL.hover = newHover;
+      canvas.style.cursor = newHover ? 'crosshair' : 'grab';
+      render();
+    }
   }
 });
 window.addEventListener('mouseup', e => {
@@ -334,7 +357,10 @@ window.addEventListener('mouseup', e => {
     const moved = Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy);
     drag = null;
     canvas.classList.remove('panning');
-    if (moved < 4 && activeTab === 'fit') handleFitClick(e);
+    if (moved < 4) {
+      if (activeTab === 'fit') handleFitClick(e);
+      else if (activeTab === 'adj' && MANUAL.active) handleAdjManualClick(e);
+    }
   }
 });
 canvas.addEventListener('wheel', e => {
@@ -835,31 +861,39 @@ function onAdjResult(result) {
   setBtn('btn-adj-run', false, '▶ 執行調整');
   ADJ.result  = result;
   ADJ.coaText = result.coa_text;
+  renderAdjResultList();
+  document.getElementById('adj-result-section').style.display = '';
+  document.getElementById('btn-adj-gpkg').style.display       = '';
+  document.getElementById('btn-adj-coa').style.display        = '';
+  document.getElementById('btn-manual-adj').style.display     = '';
+  showToast(`調整完成：${result.adjusted_parcels.length} 宗地`);
+  render();
+}
 
+function renderAdjResultList() {
+  if (!ADJ.result) return;
   const list = document.getElementById('adj-result-list');
-  list.innerHTML = result.adjusted_parcels.map((p, idx) => {
-    const statusColor = p.status === 'ok' ? 'var(--green)' : 'var(--red)';
+  list.innerHTML = ADJ.result.adjusted_parcels.map((p, idx) => {
+    const sc = p.status === 'ok' ? 'var(--green)' : 'var(--red)';
     return `<div style="border-bottom:1px solid #1e2030;padding:4px 0">
-      <div style="display:flex;align-items:flex-start;gap:6px">
+      <div style="display:flex;align-items:flex-start;gap:4px">
         <div style="flex:1;min-width:0;font-size:.88rem;line-height:1.8">
           <b>${p.label}</b> — 最大位移 ${p.max_shift_cm.toFixed(1)} cm (${p.mode})<br>
-          面積差 ${p.diff_before.toFixed(2)} → <span style="color:${statusColor}">${p.diff_after.toFixed(2)}</span> m²
+          面積差 ${p.diff_before.toFixed(2)} → <span style="color:${sc}">${p.diff_after.toFixed(2)}</span> m²
           (公差 ±${p.tol.toFixed(2)} m²)
         </div>
-        <button class="btn-tiny btn-dxf-dl" data-idx="${idx}"
-                title="下載 DXF（調整前紅 / 調整後綠）"
-                style="flex-shrink:0;margin-top:3px">📐 DXF</button>
+        <button class="btn-tiny btn-dxf-dl" data-idx="${idx}" title="下載 DXF" style="flex-shrink:0;margin-top:3px">📐</button>
+        <button class="btn-tiny btn-pdf-dl" data-idx="${idx}" title="下載調整報告 PDF" style="flex-shrink:0;margin-top:3px">📄</button>
       </div>
     </div>`;
   }).join('');
 
-  /* ── per-parcel DXF download ── */
   list.querySelectorAll('.btn-dxf-dl').forEach(btn => {
     btn.onclick = () => {
       const p = ADJ.result.adjusted_parcels[parseInt(btn.dataset.idx, 10)];
       if (!p) return;
-      const dxf  = writeParcelDXF(p);
-      if (!dxf)  { showToast('DXF 產生失敗：缺少座標資料', true); return; }
+      const dxf = writeParcelDXF(p);
+      if (!dxf) { showToast('DXF 產生失敗：缺少座標資料', true); return; }
       const blob = new Blob([dxf], { type: 'application/dxf' });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
@@ -869,11 +903,12 @@ function onAdjResult(result) {
     };
   });
 
-  document.getElementById('adj-result-section').style.display = '';
-  document.getElementById('btn-adj-gpkg').style.display = '';
-  document.getElementById('btn-adj-coa').style.display  = '';
-  showToast(`調整完成：${result.adjusted_parcels.length} 宗地`);
-  render();
+  list.querySelectorAll('.btn-pdf-dl').forEach(btn => {
+    btn.onclick = () => {
+      const p = ADJ.result.adjusted_parcels[parseInt(btn.dataset.idx, 10)];
+      if (p) generateParcelPDF(p);
+    };
+  });
 }
 
 document.getElementById('btn-adj-coa').onclick = () => {
@@ -986,6 +1021,598 @@ document.getElementById('btn-adj-chk-none').onclick = () => {
     slider.oninput = () => { label.textContent = slider.value + ' cm'; };
   }
 })();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MANUAL ADJUSTMENT MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── 幾何輔助 ─────────────────────────────────────────────────────────────────
+function shoelaceArea(coords) {
+  const n = coords.length;
+  let a = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    a += coords[i][0] * coords[j][1] - coords[j][0] * coords[i][1];
+  }
+  return Math.abs(a) / 2;
+}
+
+function pointInPolygon(py, px, coords) {
+  let inside = false;
+  const n = coords.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [yi, xi] = coords[i];
+    const [yj, xj] = coords[j];
+    if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function distToSegPx(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - x1, py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+// ── HitTest ──────────────────────────────────────────────────────────────────
+function hitTestManual(mx, my) {
+  if (!MANUAL.active) return null;
+  const PT_THRESH  = 10;  // px
+  const SEG_THRESH = 8;   // px
+
+  // 1. 界址點優先
+  for (const [label, coords] of Object.entries(MANUAL.coords)) {
+    for (let idx = 0; idx < coords.length; idx++) {
+      const [sy, sx] = worldToScreen(coords[idx][0], coords[idx][1]);
+      if (Math.hypot(mx - sx, my - sy) <= PT_THRESH) {
+        return { type: 'point', label, idx, y: coords[idx][0], x: coords[idx][1] };
+      }
+    }
+  }
+
+  // 2. 邊線
+  for (const [label, coords] of Object.entries(MANUAL.coords)) {
+    const n = coords.length;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const [sy1, sx1] = worldToScreen(coords[i][0], coords[i][1]);
+      const [sy2, sx2] = worldToScreen(coords[j][0], coords[j][1]);
+      if (distToSegPx(mx, my, sx1, sy1, sx2, sy2) <= SEG_THRESH) {
+        return { type: 'edge', label, i, j };
+      }
+    }
+  }
+
+  // 3. 整筆宗地（面）
+  for (const [label, coords] of Object.entries(MANUAL.coords)) {
+    // 先轉 world 座標做 PIP
+    // 換算 canvas → world
+    if (!extents) continue;
+    const wy = extents.maxY - (my - view.ty) / view.scale;
+    const wx = (mx - view.tx) / view.scale + extents.minX;
+    if (pointInPolygon(wy, wx, coords)) {
+      return { type: 'parcel', label };
+    }
+  }
+
+  return null;
+}
+
+// ── 初始化 MANUAL.coords（複製 coords_after） ────────────────────────────────
+function initManualCoords() {
+  MANUAL.coords = {};
+  MANUAL.areas  = {};
+  if (!ADJ.result) return;
+
+  // 先建立調整後座標的 lookup
+  for (const p of ADJ.result.adjusted_parcels) {
+    MANUAL.coords[p.label] = p.coords_after.map(c => [c[0], c[1]]);
+  }
+  // 未調整宗地也加入（使用 coords from ADJ.data）
+  if (ADJ.data) {
+    const adjKeys = new Set(ADJ.result.adjusted_parcels.map(p => p.label));
+    for (const p of ADJ.data.parcels) {
+      if (!adjKeys.has(p.label) && p.coords) {
+        MANUAL.coords[p.label] = p.coords.map(c => [c[0], c[1]]);
+      }
+    }
+  }
+  updateManualAreas();
+}
+
+// ── 重算各宗地面積 ────────────────────────────────────────────────────────────
+function updateManualAreas() {
+  if (!ADJ.data) return;
+  // 建立登記面積 / 公差的 lookup
+  const regMap = {}, tolMap = {};
+  for (const p of ADJ.data.parcels) {
+    regMap[p.label] = p.reg;
+    tolMap[p.label] = p.tol;
+  }
+  for (const [label, coords] of Object.entries(MANUAL.coords)) {
+    const area = shoelaceArea(coords);
+    const reg  = regMap[label] ?? area;
+    const tol  = tolMap[label] ?? 0;
+    const diff = reg - area;
+    MANUAL.areas[label] = { area, reg, tol, diff, ok: Math.abs(diff) <= tol };
+  }
+}
+
+// ── 進入 / 離開手動模式 ──────────────────────────────────────────────────────
+function enterManualMode() {
+  initManualCoords();
+  MANUAL.active    = true;
+  MANUAL.selection = null;
+  MANUAL.hover     = null;
+  MANUAL.step      = parseFloat(document.getElementById('manual-step')?.value ?? '0.01');
+
+  document.getElementById('manual-toolbar').style.display = 'flex';
+  document.getElementById('hint').style.display           = 'none';
+  document.getElementById('manual-sel-info').textContent  = '點擊界址點 / 邊線 / 宗地選取';
+  render();
+}
+
+function exitManualMode(apply) {
+  if (apply && ADJ.result) {
+    // 將 MANUAL.coords 寫回 ADJ.result.adjusted_parcels
+    for (const ap of ADJ.result.adjusted_parcels) {
+      if (MANUAL.coords[ap.label]) {
+        ap.coords_after = MANUAL.coords[ap.label].map(c => [c[0], c[1]]);
+        // 更新面積統計
+        const ma = MANUAL.areas[ap.label];
+        if (ma) {
+          ap.area_after = ma.area;
+          ap.diff_after = ma.diff;
+          ap.status     = ma.ok ? 'ok' : 'still_over';
+        }
+      }
+    }
+    renderAdjResultList();
+    showToast('手動調整已套用');
+  }
+  MANUAL.active    = false;
+  MANUAL.selection = null;
+  MANUAL.hover     = null;
+  document.getElementById('manual-toolbar').style.display = 'none';
+  document.getElementById('hint').style.display           = '';
+  canvas.style.cursor = 'grab';
+  render();
+}
+
+// ── 點擊選取 ─────────────────────────────────────────────────────────────────
+function handleAdjManualClick(e) {
+  const rect = canvas.getBoundingClientRect();
+  const hit  = hitTestManual(e.clientX - rect.left, e.clientY - rect.top);
+  MANUAL.selection = hit;
+
+  const info = document.getElementById('manual-sel-info');
+  if (!hit) {
+    info.textContent = '點擊界址點 / 邊線 / 宗地選取';
+  } else if (hit.type === 'point') {
+    info.textContent = `選取：點 [${hit.label}] #${hit.idx}  (N${hit.y.toFixed(3)}, E${hit.x.toFixed(3)})`;
+  } else if (hit.type === 'edge') {
+    info.textContent = `選取：邊線 [${hit.label}] 第${hit.i}–${hit.j}段`;
+  } else {
+    info.textContent = `選取：宗地 [${hit.label}]`;
+  }
+  render();
+}
+
+// ── 移動選取（用箭頭鍵） ─────────────────────────────────────────────────────
+const EPS_SHARE = 0.001; // 共用界址點判斷距離（公尺）
+
+function moveManualSelection(dy, dx) {
+  const sel = MANUAL.selection;
+  if (!sel) return;
+
+  function movePtInAll(origY, origX, dy, dx) {
+    // 在所有宗地中找到 epsilon 吻合的點並移動
+    for (const coords of Object.values(MANUAL.coords)) {
+      for (let k = 0; k < coords.length; k++) {
+        if (Math.abs(coords[k][0] - origY) < EPS_SHARE && Math.abs(coords[k][1] - origX) < EPS_SHARE) {
+          coords[k] = [coords[k][0] + dy, coords[k][1] + dx];
+        }
+      }
+    }
+  }
+
+  if (sel.type === 'point') {
+    const coords = MANUAL.coords[sel.label];
+    if (!coords) return;
+    const origY = coords[sel.idx][0];
+    const origX = coords[sel.idx][1];
+    movePtInAll(origY, origX, dy, dx);
+    // 更新 selection 追蹤位置
+    MANUAL.selection = { ...sel, y: origY + dy, x: origX + dx };
+
+  } else if (sel.type === 'edge') {
+    const coords = MANUAL.coords[sel.label];
+    if (!coords) return;
+    // 取 snapshot（移動前的原始位置，避免 epsilon 雙次匹配）
+    const ptA = [...coords[sel.i]];
+    const ptB = [...coords[sel.j]];
+    movePtInAll(ptA[0], ptA[1], dy, dx);
+    // 移動 B 前先確認 A, B 不相同（避免重點）
+    if (!(Math.abs(ptA[0] - ptB[0]) < EPS_SHARE && Math.abs(ptA[1] - ptB[1]) < EPS_SHARE)) {
+      movePtInAll(ptB[0], ptB[1], dy, dx);
+    }
+
+  } else if (sel.type === 'parcel') {
+    const coords = MANUAL.coords[sel.label];
+    if (!coords) return;
+    // 整筆移動：每個點都 movePtInAll
+    const snapshots = coords.map(c => [c[0], c[1]]);
+    for (const [origY, origX] of snapshots) {
+      movePtInAll(origY, origX, dy, dx);
+    }
+  }
+
+  updateManualAreas();
+  render();
+}
+
+// ── 渲染（手動模式） ─────────────────────────────────────────────────────────
+function renderAdjManual(W, H) {
+  if (!MANUAL.active || !ADJ.data) return;
+
+  // 背景：所有未調整宗地（淡灰）
+  for (const [label, coords] of Object.entries(MANUAL.coords)) {
+    const ma = MANUAL.areas[label];
+    const col = ma ? (ma.ok ? 'rgba(62,207,110,.35)' : 'rgba(240,82,82,.35)') : 'rgba(100,100,120,.3)';
+    drawPolygon(coords, col, 1);
+  }
+
+  // 面積 / 較差資訊標籤
+  ctx.textAlign = 'center';
+  for (const [label, coords] of Object.entries(MANUAL.coords)) {
+    const ma = MANUAL.areas[label];
+    if (!ma || !coords.length) continue;
+    const cy_ = coords.reduce((s, c) => s + c[0], 0) / coords.length;
+    const cx_ = coords.reduce((s, c) => s + c[1], 0) / coords.length;
+    const [sx, sy] = worldToScreen(cy_, cx_);
+    const col  = ma.ok ? '#3ecf6e' : '#f05252';
+
+    // 地號
+    ctx.font = `${Math.max(9, Math.min(11, view.scale * 0.8))}px Consolas`;
+    const tw0 = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(10,12,18,.7)'; ctx.fillRect(sx - tw0 / 2 - 3, sy - 11, tw0 + 6, 14);
+    ctx.fillStyle = col; ctx.fillText(label, sx, sy);
+
+    // 較差
+    const diffTxt = `差${ma.diff.toFixed(2)}`;
+    ctx.font = `${Math.max(8, Math.min(10, view.scale * 0.7))}px Consolas`;
+    const tw1 = ctx.measureText(diffTxt).width;
+    ctx.fillStyle = 'rgba(10,12,18,.7)'; ctx.fillRect(sx - tw1 / 2 - 2, sy + 4, tw1 + 4, 13);
+    ctx.fillStyle = col; ctx.fillText(diffTxt, sx, sy + 15);
+  }
+
+  // 選取高亮
+  const sel   = MANUAL.selection;
+  const hover = MANUAL.hover;
+
+  function highlightEdge(label, i, j, strokeCol) {
+    const coords = MANUAL.coords[label];
+    if (!coords) return;
+    const [sy1, sx1] = worldToScreen(coords[i][0], coords[i][1]);
+    const [sy2, sx2] = worldToScreen(coords[j][0], coords[j][1]);
+    ctx.strokeStyle = strokeCol; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(sx1, sy1); ctx.lineTo(sx2, sy2); ctx.stroke();
+  }
+
+  function highlightPt(label, idx, strokeCol) {
+    const coords = MANUAL.coords[label];
+    if (!coords || idx >= coords.length) return;
+    const [sy, sx] = worldToScreen(coords[idx][0], coords[idx][1]);
+    ctx.strokeStyle = strokeCol; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, 7, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = strokeCol.replace(/[\d.]+\)/, '0.4)');
+    ctx.fill();
+  }
+
+  // Hover
+  if (hover) {
+    if (hover.type === 'point') highlightPt(hover.label, hover.idx, 'rgba(167,139,250,.8)');
+    else if (hover.type === 'edge') highlightEdge(hover.label, hover.i, hover.j, 'rgba(167,139,250,.7)');
+  }
+
+  // Selection
+  if (sel) {
+    if (sel.type === 'point') {
+      highlightPt(sel.label, sel.idx, '#a78bfa');
+      const coords = MANUAL.coords[sel.label];
+      if (coords) {
+        const [sy, sx] = worldToScreen(coords[sel.idx][0], coords[sel.idx][1]);
+        ctx.fillStyle = '#a78bfa'; ctx.font = '10px Consolas'; ctx.textAlign = 'left';
+        ctx.fillText(`N${coords[sel.idx][0].toFixed(3)}`, sx + 10, sy - 4);
+        ctx.fillText(`E${coords[sel.idx][1].toFixed(3)}`, sx + 10, sy + 8);
+      }
+    } else if (sel.type === 'edge') {
+      highlightEdge(sel.label, sel.i, sel.j, '#a78bfa');
+    } else if (sel.type === 'parcel') {
+      const coords = MANUAL.coords[sel.label];
+      if (coords) {
+        ctx.strokeStyle = '#a78bfa'; ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        drawPolygon(coords, '#a78bfa', 2.5, false);
+        ctx.setLineDash([]);
+      }
+    }
+  }
+
+  // 所有界址點（小圓點）
+  ctx.fillStyle = 'rgba(200,200,255,.6)';
+  for (const coords of Object.values(MANUAL.coords)) {
+    for (const [wy, wx] of coords) {
+      const [sy, sx] = worldToScreen(wy, wx);
+      ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+}
+
+// ── 手動工具列事件 ───────────────────────────────────────────────────────────
+document.getElementById('btn-manual-adj').onclick = () => {
+  if (ADJ.result) enterManualMode();
+};
+
+document.getElementById('btn-manual-step') && (document.getElementById('manual-step').onchange = e => {
+  MANUAL.step = parseFloat(e.target.value);
+});
+
+document.getElementById('btn-manual-reset').onclick = () => {
+  initManualCoords();
+  MANUAL.selection = null;
+  document.getElementById('manual-sel-info').textContent = '點擊界址點 / 邊線 / 宗地選取';
+  render();
+  showToast('已重設為自動調整結果');
+};
+
+document.getElementById('btn-manual-confirm').onclick = () => exitManualMode(true);
+document.getElementById('btn-manual-exit').onclick    = () => exitManualMode(false);
+
+// step select
+(function () {
+  const sel = document.getElementById('manual-step');
+  if (sel) sel.onchange = () => { MANUAL.step = parseFloat(sel.value); };
+})();
+
+// ── 鍵盤（方向鍵 / ESC） ─────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (!MANUAL.active) return;
+
+  if (e.key === 'Escape') {
+    exitManualMode(false);
+    return;
+  }
+
+  const step = MANUAL.step;
+  let dy = 0, dx = 0;
+  if (e.key === 'ArrowUp')    dy = +step;
+  else if (e.key === 'ArrowDown')  dy = -step;
+  else if (e.key === 'ArrowLeft')  dx = -step;
+  else if (e.key === 'ArrowRight') dx = +step;
+  else return;
+
+  e.preventDefault();
+  moveManualSelection(dy, dx);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PDF REPORT MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+function generateParcelPDF(p) {
+  if (typeof jspdf === 'undefined' && typeof window.jspdf === 'undefined') {
+    showToast('jsPDF 尚未載入，請稍後再試', true);
+    return;
+  }
+  const A4W = 794, A4H = 1123;   // 96 dpi A4
+  const offscreen = document.createElement('canvas');
+  offscreen.width  = A4W;
+  offscreen.height = A4H;
+  const oc = offscreen.getContext('2d');
+
+  drawPDFPage(oc, A4W, A4H, p);
+
+  const img  = offscreen.toDataURL('image/jpeg', 0.92);
+  const jsPDF = window.jspdf?.jsPDF || jspdf.jsPDF;
+  const doc  = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  const ptW  = doc.internal.pageSize.getWidth();
+  const ptH  = doc.internal.pageSize.getHeight();
+  doc.addImage(img, 'JPEG', 0, 0, ptW, ptH);
+  doc.save(`adj_report_${p.label}.pdf`);
+  showToast(`已下載：adj_report_${p.label}.pdf`);
+}
+
+function drawPDFPage(oc, W, H, p) {
+  // 背景
+  oc.fillStyle = '#ffffff';
+  oc.fillRect(0, 0, W, H);
+
+  const MARGIN = 40;
+  let y = MARGIN;
+
+  // ── 標題 ──
+  oc.fillStyle = '#1a1d27';
+  oc.fillRect(0, 0, W, 70);
+  oc.fillStyle = '#ffffff';
+  oc.font = 'bold 22px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
+  oc.textAlign = 'left';
+  oc.fillText('地籍調整報告', MARGIN, 44);
+  oc.font = '13px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
+  oc.fillStyle = '#9ca3af';
+  oc.fillText(`地號：${p.label}`, MARGIN + 200, 44);
+  y = 90;
+
+  // ── 統計表格 ──
+  const rows = [
+    ['登記面積', `${p.reg.toFixed(4)} m²`],
+    ['調整前面積', `${p.area_before.toFixed(4)} m²`],
+    ['調整後面積', `${p.area_after.toFixed(4)} m²`],
+    ['面積較差（前）', `${p.diff_before.toFixed(4)} m²`],
+    ['面積較差（後）', `${p.diff_after.toFixed(4)} m²`],
+    ['公差', `±${p.tol.toFixed(4)} m²`],
+    ['最大位移量', `${p.max_shift_cm.toFixed(2)} cm`],
+    ['調整模式', p.mode],
+    ['調整結果', p.status === 'ok' ? '✓ 進入公差範圍' : '⚠ 仍超出公差'],
+  ];
+  const COL1 = MARGIN, COL2 = MARGIN + 200;
+  const ROW_H = 26;
+  oc.font = 'bold 12px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
+  for (let i = 0; i < rows.length; i++) {
+    const ry = y + i * ROW_H;
+    oc.fillStyle = i % 2 === 0 ? '#f8f9fa' : '#ffffff';
+    oc.fillRect(MARGIN - 4, ry - 14, W - MARGIN * 2 + 8, ROW_H);
+    oc.fillStyle = '#374151';
+    oc.font = '12px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
+    oc.textAlign = 'left';
+    oc.fillText(rows[i][0], COL1, ry);
+    oc.fillStyle = rows[i][0] === '調整結果'
+      ? (p.status === 'ok' ? '#15803d' : '#b91c1c')
+      : '#111827';
+    oc.font = 'bold 12px "Consolas", monospace';
+    oc.fillText(rows[i][1], COL2, ry);
+  }
+  y += rows.length * ROW_H + 20;
+
+  // ── 分隔線 ──
+  oc.strokeStyle = '#e5e7eb'; oc.lineWidth = 1;
+  oc.beginPath(); oc.moveTo(MARGIN, y); oc.lineTo(W - MARGIN, y); oc.stroke();
+  y += 16;
+
+  // ── 示意圖標題 ──
+  oc.fillStyle = '#374151';
+  oc.font = 'bold 13px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
+  oc.textAlign = 'left';
+  oc.fillText('調整示意圖', MARGIN, y + 14);
+  y += 30;
+
+  // ── 示意圖區域 ──
+  const diagH = Math.min(H - y - 80, 480);
+  const diagW = W - MARGIN * 2;
+  oc.strokeStyle = '#e5e7eb'; oc.lineWidth = 1;
+  oc.strokeRect(MARGIN, y, diagW, diagH);
+  drawParcelDiagramInPDF(oc, MARGIN + 10, y + 10, diagW - 20, diagH - 20, p);
+  y += diagH + 16;
+
+  // ── 圖例 ──
+  const legendItems = [
+    { col: '#f05252', dash: true,  label: '調整前輪廓' },
+    { col: '#3ecf6e', dash: false, label: '調整後輪廓' },
+    { col: '#f5c542', dash: false, label: '最大位移點' },
+  ];
+  let lx = MARGIN;
+  oc.font = '11px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
+  for (const item of legendItems) {
+    oc.strokeStyle = item.col; oc.lineWidth = 2;
+    if (item.dash) oc.setLineDash([6, 4]); else oc.setLineDash([]);
+    oc.beginPath(); oc.moveTo(lx, y + 10); oc.lineTo(lx + 28, y + 10); oc.stroke();
+    oc.setLineDash([]);
+    oc.fillStyle = '#374151'; oc.textAlign = 'left';
+    oc.fillText(item.label, lx + 34, y + 14);
+    lx += 120;
+  }
+  y += 30;
+
+  // ── 頁尾 ──
+  oc.fillStyle = '#9ca3af';
+  oc.font = '10px "Consolas", monospace';
+  oc.textAlign = 'center';
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  oc.fillText(`CadastralWorkbench v${window.CW_VERSION || '0.7'}  ·  ${dateStr}`, W / 2, H - 20);
+}
+
+function drawParcelDiagramInPDF(oc, ox, oy, W, H, p) {
+  const before = p.coords_before;
+  const after  = p.coords_after;
+  if (!before || !after || !before.length || !after.length) return;
+
+  // 計算 bounding box（涵蓋 before + after）
+  const allY = [...before.map(c => c[0]), ...after.map(c => c[0])];
+  const allX = [...before.map(c => c[1]), ...after.map(c => c[1])];
+  const minY = Math.min(...allY), maxY = Math.max(...allY);
+  const minX = Math.min(...allX), maxX = Math.max(...allX);
+  const rY = maxY - minY || 1, rX = maxX - minX || 1;
+  const pad = 20;
+  const sc  = Math.min((W - pad * 2) / rX, (H - pad * 2) / rY);
+  const offX = ox + pad + (W - pad * 2 - rX * sc) / 2;
+  const offY = oy + pad + (H - pad * 2 - rY * sc) / 2;
+
+  function toCanvas(wy, wx) {
+    return [offX + (wx - minX) * sc, offY + (maxY - wy) * sc];
+  }
+
+  // 調整前（紅虛線）
+  oc.strokeStyle = '#f05252'; oc.lineWidth = 1.5; oc.setLineDash([8, 5]);
+  oc.beginPath();
+  before.forEach((c, i) => {
+    const [cx, cy] = toCanvas(c[0], c[1]);
+    if (i === 0) oc.moveTo(cx, cy); else oc.lineTo(cx, cy);
+  });
+  oc.closePath(); oc.stroke(); oc.setLineDash([]);
+
+  // 調整後（綠實線）
+  oc.strokeStyle = '#3ecf6e'; oc.lineWidth = 2; oc.setLineDash([]);
+  oc.fillStyle = 'rgba(62,207,110,0.08)';
+  oc.beginPath();
+  after.forEach((c, i) => {
+    const [cx, cy] = toCanvas(c[0], c[1]);
+    if (i === 0) oc.moveTo(cx, cy); else oc.lineTo(cx, cy);
+  });
+  oc.closePath(); oc.fill(); oc.stroke();
+
+  // 位移向量箭頭 + 找最大位移點
+  let maxShift = 0, maxPt = null;
+  const n = Math.min(before.length, after.length);
+  for (let i = 0; i < n; i++) {
+    const [bx, by] = toCanvas(before[i][0], before[i][1]);
+    const [ax, ay] = toCanvas(after[i][0],  after[i][1]);
+    const dist = Math.hypot(ax - bx, ay - by);
+    if (dist > 0.5) {  // 省略微小位移
+      oc.strokeStyle = 'rgba(167,139,250,0.7)'; oc.lineWidth = 1;
+      oc.beginPath(); oc.moveTo(bx, by); oc.lineTo(ax, ay); oc.stroke();
+      // 箭頭頭
+      const angle = Math.atan2(ay - by, ax - bx);
+      const AL = 6;
+      oc.beginPath();
+      oc.moveTo(ax, ay);
+      oc.lineTo(ax - AL * Math.cos(angle - 0.4), ay - AL * Math.sin(angle - 0.4));
+      oc.lineTo(ax - AL * Math.cos(angle + 0.4), ay - AL * Math.sin(angle + 0.4));
+      oc.closePath(); oc.fillStyle = 'rgba(167,139,250,0.9)'; oc.fill();
+    }
+    const worldDist = Math.hypot(after[i][0] - before[i][0], after[i][1] - before[i][1]);
+    if (worldDist > maxShift) { maxShift = worldDist; maxPt = i; }
+  }
+
+  // 最大位移點標示
+  if (maxPt !== null) {
+    const [ax, ay] = toCanvas(after[maxPt][0], after[maxPt][1]);
+    oc.fillStyle = '#f5c542';
+    oc.beginPath(); oc.arc(ax, ay, 6, 0, Math.PI * 2); oc.fill();
+    oc.strokeStyle = '#fff'; oc.lineWidth = 1.5;
+    oc.beginPath(); oc.arc(ax, ay, 6, 0, Math.PI * 2); oc.stroke();
+    oc.fillStyle = '#92400e';
+    oc.font = 'bold 10px "Consolas", monospace';
+    oc.textAlign = 'left';
+    oc.fillText(`max: ${p.max_shift_cm.toFixed(2)} cm`, ax + 10, ay + 4);
+  }
+
+  // 比例尺（右下角）
+  const scaleM  = 1;   // 1 公尺
+  const scalePx = sc;
+  if (scalePx > 10 && scalePx < 300) {
+    const bx = ox + W - 10, by_ = oy + H - 10;
+    oc.strokeStyle = '#6b7280'; oc.lineWidth = 1; oc.setLineDash([]);
+    oc.beginPath(); oc.moveTo(bx - scalePx, by_); oc.lineTo(bx, by_); oc.stroke();
+    oc.beginPath(); oc.moveTo(bx - scalePx, by_ - 4); oc.lineTo(bx - scalePx, by_); oc.stroke();
+    oc.beginPath(); oc.moveTo(bx, by_ - 4); oc.lineTo(bx, by_); oc.stroke();
+    oc.fillStyle = '#6b7280'; oc.font = '9px Consolas'; oc.textAlign = 'center';
+    oc.fillText(`${scaleM} m`, bx - scalePx / 2, by_ - 6);
+  }
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 resizeCanvas();
