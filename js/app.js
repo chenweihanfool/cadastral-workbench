@@ -22,12 +22,12 @@ const ADJ = {
 };
 
 const MANUAL = {
-  active:    false,
-  step:      0.01,       // metres per arrow-key press (default 1 cm)
-  selection: null,       // { type:'point'|'edge'|'parcel', label, idx/i/j, y, x }
-  hover:     null,
-  coords:    {},         // label → [[y,x], ...]  working coordinates
-  areas:     {},         // label → { area, reg, tol, diff, ok }
+  active:     false,
+  step:       0.01,        // metres per arrow-key press (default 1 cm)
+  selections: [],          // [{ type:'point'|'edge'|'parcel', label, idx/i/j, y, x }, ...]
+  hover:      null,
+  coords:     {},          // label → [[y,x], ...]  working coordinates
+  areas:      {},          // label → { area, reg, tol, diff, ok }
 };
 
 let activeTab  = 'fit';
@@ -1102,25 +1102,45 @@ function hitTestManual(mx, my) {
   return null;
 }
 
-// ── 初始化 MANUAL.coords（複製 coords_after） ────────────────────────────────
+// ── 初始化 MANUAL.coords（複製 coords_after，並將調整後的共用點傳播至鄰地） ──
 function initManualCoords() {
   MANUAL.coords = {};
   MANUAL.areas  = {};
   if (!ADJ.result) return;
 
-  // 先建立調整後座標的 lookup
+  // Step 1：所有宗地先用原始座標初始化
+  if (ADJ.data) {
+    for (const p of ADJ.data.parcels) {
+      if (p.coords) MANUAL.coords[p.label] = p.coords.map(c => [c[0], c[1]]);
+    }
+  }
+
+  // Step 2：被調整的宗地覆蓋為 coords_after
   for (const p of ADJ.result.adjusted_parcels) {
     MANUAL.coords[p.label] = p.coords_after.map(c => [c[0], c[1]]);
   }
-  // 未調整宗地也加入（使用 coords from ADJ.data）
-  if (ADJ.data) {
-    const adjKeys = new Set(ADJ.result.adjusted_parcels.map(p => p.label));
-    for (const p of ADJ.data.parcels) {
-      if (!adjKeys.has(p.label) && p.coords) {
-        MANUAL.coords[p.label] = p.coords.map(c => [c[0], c[1]]);
+
+  // Step 3：將調整後移動的點傳播到「未被調整的鄰地」
+  // （Python 只更新被調整宗地的座標，鄰地共用點仍停在原位，導致 epsilon 匹配失效）
+  const adjKeys = new Set(ADJ.result.adjusted_parcels.map(p => p.label));
+  for (const ap of ADJ.result.adjusted_parcels) {
+    const n = Math.min(ap.coords_before.length, ap.coords_after.length);
+    for (let i = 0; i < n; i++) {
+      const [by, bx] = ap.coords_before[i];
+      const [ay, ax] = ap.coords_after[i];
+      if (Math.abs(ay - by) < 1e-9 && Math.abs(ax - bx) < 1e-9) continue; // 點未移動
+      // 在所有「未調整」的鄰地中尋找原始位置相符的點，更新為調整後位置
+      for (const [label, coords] of Object.entries(MANUAL.coords)) {
+        if (adjKeys.has(label)) continue;
+        for (let k = 0; k < coords.length; k++) {
+          if (Math.abs(coords[k][0] - by) < EPS_SHARE && Math.abs(coords[k][1] - bx) < EPS_SHARE) {
+            coords[k] = [ay, ax];
+          }
+        }
       }
     }
   }
+
   updateManualAreas();
 }
 
@@ -1145,14 +1165,14 @@ function updateManualAreas() {
 // ── 進入 / 離開手動模式 ──────────────────────────────────────────────────────
 function enterManualMode() {
   initManualCoords();
-  MANUAL.active    = true;
-  MANUAL.selection = null;
-  MANUAL.hover     = null;
-  MANUAL.step      = parseFloat(document.getElementById('manual-step')?.value ?? '0.01');
+  MANUAL.active     = true;
+  MANUAL.selections = [];
+  MANUAL.hover      = null;
+  MANUAL.step       = parseFloat(document.getElementById('manual-step')?.value ?? '0.01');
 
   document.getElementById('manual-toolbar').style.display = 'flex';
   document.getElementById('hint').style.display           = 'none';
-  document.getElementById('manual-sel-info').textContent  = '點擊界址點 / 邊線 / 宗地選取';
+  document.getElementById('manual-sel-info').textContent  = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
   render();
 }
 
@@ -1162,7 +1182,6 @@ function exitManualMode(apply) {
     for (const ap of ADJ.result.adjusted_parcels) {
       if (MANUAL.coords[ap.label]) {
         ap.coords_after = MANUAL.coords[ap.label].map(c => [c[0], c[1]]);
-        // 更新面積統計
         const ma = MANUAL.areas[ap.label];
         if (ma) {
           ap.area_after = ma.area;
@@ -1174,82 +1193,131 @@ function exitManualMode(apply) {
     renderAdjResultList();
     showToast('手動調整已套用');
   }
-  MANUAL.active    = false;
-  MANUAL.selection = null;
-  MANUAL.hover     = null;
+  MANUAL.active     = false;
+  MANUAL.selections = [];
+  MANUAL.hover      = null;
   document.getElementById('manual-toolbar').style.display = 'none';
   document.getElementById('hint').style.display           = '';
   canvas.style.cursor = 'grab';
   render();
 }
 
-// ── 點擊選取 ─────────────────────────────────────────────────────────────────
+// ── 點擊選取（Ctrl+click 複選同類） ─────────────────────────────────────────
 function handleAdjManualClick(e) {
   const rect = canvas.getBoundingClientRect();
   const hit  = hitTestManual(e.clientX - rect.left, e.clientY - rect.top);
-  MANUAL.selection = hit;
-
   const info = document.getElementById('manual-sel-info');
+  const ctrl = e.ctrlKey || e.metaKey;
+
   if (!hit) {
-    info.textContent = '點擊界址點 / 邊線 / 宗地選取';
-  } else if (hit.type === 'point') {
-    info.textContent = `選取：點 [${hit.label}] #${hit.idx}  (N${hit.y.toFixed(3)}, E${hit.x.toFixed(3)})`;
-  } else if (hit.type === 'edge') {
-    info.textContent = `選取：邊線 [${hit.label}] 第${hit.i}–${hit.j}段`;
+    // 點空白處 → 清除所有選取
+    MANUAL.selections = [];
+    info.textContent  = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
+    render();
+    return;
+  }
+
+  if (ctrl && MANUAL.selections.length > 0) {
+    const existType = MANUAL.selections[0].type;
+    if (hit.type !== existType) {
+      // 類型不符 → 不加入，提示
+      info.textContent = `⚠ 複選限同類（目前：${existType}）`;
+      render();
+      return;
+    }
+    // 判斷是否已選（若已選則取消）
+    const key = selKey(hit);
+    const idx = MANUAL.selections.findIndex(s => selKey(s) === key);
+    if (idx >= 0) {
+      MANUAL.selections.splice(idx, 1);
+    } else {
+      MANUAL.selections.push(hit);
+    }
   } else {
-    info.textContent = `選取：宗地 [${hit.label}]`;
+    // 一般點擊 → 重設為單選
+    MANUAL.selections = [hit];
+  }
+
+  // 更新 info 文字
+  const cnt = MANUAL.selections.length;
+  if (cnt === 0) {
+    info.textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
+  } else if (cnt === 1) {
+    const s = MANUAL.selections[0];
+    if (s.type === 'point')  info.textContent = `選取：點 [${s.label}] #${s.idx}  (N${s.y.toFixed(3)}, E${s.x.toFixed(3)})`;
+    else if (s.type === 'edge')   info.textContent = `選取：邊線 [${s.label}] 第${s.i}–${s.j}段`;
+    else                          info.textContent = `選取：宗地 [${s.label}]`;
+  } else {
+    const labels = [...new Set(MANUAL.selections.map(s => s.label))].join('、');
+    info.textContent = `已複選 ${cnt} 個 ${MANUAL.selections[0].type}（${labels}）`;
   }
   render();
 }
 
-// ── 移動選取（用箭頭鍵） ─────────────────────────────────────────────────────
+function selKey(s) {
+  if (s.type === 'point')  return `pt:${s.label}:${s.idx}`;
+  if (s.type === 'edge')   return `edge:${s.label}:${s.i}:${s.j}`;
+  return `parcel:${s.label}`;
+}
+
+// ── 移動選取（用箭頭鍵，支援多選） ──────────────────────────────────────────
 const EPS_SHARE = 0.001; // 共用界址點判斷距離（公尺）
 
-function moveManualSelection(dy, dx) {
-  const sel = MANUAL.selection;
-  if (!sel) return;
+/** 在所有宗地中找到 epsilon 吻合的點並移動（傳播鄰地連動） */
+function movePtInAll(origY, origX, dy, dx) {
+  for (const coords of Object.values(MANUAL.coords)) {
+    for (let k = 0; k < coords.length; k++) {
+      if (Math.abs(coords[k][0] - origY) < EPS_SHARE && Math.abs(coords[k][1] - origX) < EPS_SHARE) {
+        coords[k] = [coords[k][0] + dy, coords[k][1] + dx];
+      }
+    }
+  }
+}
 
-  function movePtInAll(origY, origX, dy, dx) {
-    // 在所有宗地中找到 epsilon 吻合的點並移動
-    for (const coords of Object.values(MANUAL.coords)) {
-      for (let k = 0; k < coords.length; k++) {
-        if (Math.abs(coords[k][0] - origY) < EPS_SHARE && Math.abs(coords[k][1] - origX) < EPS_SHARE) {
-          coords[k] = [coords[k][0] + dy, coords[k][1] + dx];
-        }
+function moveManualSelection(dy, dx) {
+  if (!MANUAL.selections.length) return;
+
+  // 收集所有「待移動點」的原始位置（去重，避免同一點被多個選取項帶到後重複移動）
+  // 用 "y:x" 字串做 key 去重
+  const toMoveMap = new Map(); // key → [origY, origX]
+
+  for (const sel of MANUAL.selections) {
+    if (sel.type === 'point') {
+      const coords = MANUAL.coords[sel.label];
+      if (!coords) continue;
+      const [oy, ox] = coords[sel.idx];
+      const key = `${oy.toFixed(6)}:${ox.toFixed(6)}`;
+      toMoveMap.set(key, [oy, ox]);
+
+    } else if (sel.type === 'edge') {
+      const coords = MANUAL.coords[sel.label];
+      if (!coords) continue;
+      for (const idx of [sel.i, sel.j]) {
+        const [oy, ox] = coords[idx];
+        const key = `${oy.toFixed(6)}:${ox.toFixed(6)}`;
+        toMoveMap.set(key, [oy, ox]);
+      }
+
+    } else if (sel.type === 'parcel') {
+      const coords = MANUAL.coords[sel.label];
+      if (!coords) continue;
+      for (const [oy, ox] of coords) {
+        const key = `${oy.toFixed(6)}:${ox.toFixed(6)}`;
+        toMoveMap.set(key, [oy, ox]);
       }
     }
   }
 
-  if (sel.type === 'point') {
-    const coords = MANUAL.coords[sel.label];
-    if (!coords) return;
-    const origY = coords[sel.idx][0];
-    const origX = coords[sel.idx][1];
+  // 移動所有去重後的點（每個點只呼叫一次，movePtInAll 會傳播到所有鄰地）
+  for (const [origY, origX] of toMoveMap.values()) {
     movePtInAll(origY, origX, dy, dx);
-    // 更新 selection 追蹤位置
-    MANUAL.selection = { ...sel, y: origY + dy, x: origX + dx };
-
-  } else if (sel.type === 'edge') {
-    const coords = MANUAL.coords[sel.label];
-    if (!coords) return;
-    // 取 snapshot（移動前的原始位置，避免 epsilon 雙次匹配）
-    const ptA = [...coords[sel.i]];
-    const ptB = [...coords[sel.j]];
-    movePtInAll(ptA[0], ptA[1], dy, dx);
-    // 移動 B 前先確認 A, B 不相同（避免重點）
-    if (!(Math.abs(ptA[0] - ptB[0]) < EPS_SHARE && Math.abs(ptA[1] - ptB[1]) < EPS_SHARE)) {
-      movePtInAll(ptB[0], ptB[1], dy, dx);
-    }
-
-  } else if (sel.type === 'parcel') {
-    const coords = MANUAL.coords[sel.label];
-    if (!coords) return;
-    // 整筆移動：每個點都 movePtInAll
-    const snapshots = coords.map(c => [c[0], c[1]]);
-    for (const [origY, origX] of snapshots) {
-      movePtInAll(origY, origX, dy, dx);
-    }
   }
+
+  // 更新 point 選取的追蹤座標
+  MANUAL.selections = MANUAL.selections.map(sel => {
+    if (sel.type === 'point') return { ...sel, y: sel.y + dy, x: sel.x + dx };
+    return sel;
+  });
 
   updateManualAreas();
   render();
@@ -1290,52 +1358,52 @@ function renderAdjManual(W, H) {
     ctx.fillStyle = col; ctx.fillText(diffTxt, sx, sy + 15);
   }
 
-  // 選取高亮
-  const sel   = MANUAL.selection;
-  const hover = MANUAL.hover;
-
-  function highlightEdge(label, i, j, strokeCol) {
+  // ── 高亮輔助函式 ──────────────────────────────────────────────────────────
+  function highlightEdge(label, i, j, strokeCol, lineW) {
     const coords = MANUAL.coords[label];
     if (!coords) return;
     const [sx1, sy1] = worldToScreen(coords[i][0], coords[i][1]);
     const [sx2, sy2] = worldToScreen(coords[j][0], coords[j][1]);
-    ctx.strokeStyle = strokeCol; ctx.lineWidth = 3;
+    ctx.strokeStyle = strokeCol; ctx.lineWidth = lineW || 3;
     ctx.beginPath(); ctx.moveTo(sx1, sy1); ctx.lineTo(sx2, sy2); ctx.stroke();
   }
 
-  function highlightPt(label, idx, strokeCol) {
+  function highlightPt(label, idx, strokeCol, r) {
     const coords = MANUAL.coords[label];
     if (!coords || idx >= coords.length) return;
     const [sx, sy] = worldToScreen(coords[idx][0], coords[idx][1]);
     ctx.strokeStyle = strokeCol; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(sx, sy, 7, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = strokeCol.replace(/[\d.]+\)/, '0.4)');
-    ctx.fill();
+    ctx.fillStyle = strokeCol.replace(/[\d.]+\)$/, '0.35)');
+    ctx.beginPath(); ctx.arc(sx, sy, r || 7, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
   }
 
-  // Hover
+  // ── Hover 高亮（紫色淡） ──────────────────────────────────────────────────
+  const hover = MANUAL.hover;
   if (hover) {
-    if (hover.type === 'point') highlightPt(hover.label, hover.idx, 'rgba(167,139,250,.8)');
-    else if (hover.type === 'edge') highlightEdge(hover.label, hover.i, hover.j, 'rgba(167,139,250,.7)');
+    if (hover.type === 'point') highlightPt(hover.label, hover.idx, 'rgba(167,139,250,.8)', 6);
+    else if (hover.type === 'edge') highlightEdge(hover.label, hover.i, hover.j, 'rgba(167,139,250,.7)', 2);
   }
 
-  // Selection
-  if (sel) {
+  // ── 選取高亮（所有 selections，紫色亮） ──────────────────────────────────
+  for (const sel of MANUAL.selections) {
     if (sel.type === 'point') {
-      highlightPt(sel.label, sel.idx, '#a78bfa');
-      const coords = MANUAL.coords[sel.label];
-      if (coords) {
-        const [sx, sy] = worldToScreen(coords[sel.idx][0], coords[sel.idx][1]);
-        ctx.fillStyle = '#a78bfa'; ctx.font = '10px Consolas'; ctx.textAlign = 'left';
-        ctx.fillText(`N${coords[sel.idx][0].toFixed(3)}`, sx + 10, sy - 4);
-        ctx.fillText(`E${coords[sel.idx][1].toFixed(3)}`, sx + 10, sy + 8);
+      highlightPt(sel.label, sel.idx, '#a78bfa', 7);
+      // 僅單選時顯示座標文字
+      if (MANUAL.selections.length === 1) {
+        const coords = MANUAL.coords[sel.label];
+        if (coords && sel.idx < coords.length) {
+          const [sx, sy] = worldToScreen(coords[sel.idx][0], coords[sel.idx][1]);
+          ctx.fillStyle = '#a78bfa'; ctx.font = '10px Consolas'; ctx.textAlign = 'left';
+          ctx.fillText(`N${coords[sel.idx][0].toFixed(3)}`, sx + 10, sy - 4);
+          ctx.fillText(`E${coords[sel.idx][1].toFixed(3)}`, sx + 10, sy + 8);
+        }
       }
     } else if (sel.type === 'edge') {
-      highlightEdge(sel.label, sel.i, sel.j, '#a78bfa');
+      highlightEdge(sel.label, sel.i, sel.j, '#a78bfa', 3);
     } else if (sel.type === 'parcel') {
       const coords = MANUAL.coords[sel.label];
       if (coords) {
-        ctx.strokeStyle = '#a78bfa'; ctx.lineWidth = 2.5;
         ctx.setLineDash([6, 4]);
         drawPolygon(coords, '#a78bfa', 2.5, false);
         ctx.setLineDash([]);
@@ -1364,8 +1432,8 @@ document.getElementById('btn-manual-step') && (document.getElementById('manual-s
 
 document.getElementById('btn-manual-reset').onclick = () => {
   initManualCoords();
-  MANUAL.selection = null;
-  document.getElementById('manual-sel-info').textContent = '點擊界址點 / 邊線 / 宗地選取';
+  MANUAL.selections = [];
+  document.getElementById('manual-sel-info').textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
   render();
   showToast('已重設為自動調整結果');
 };
