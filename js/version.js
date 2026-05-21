@@ -1,8 +1,16 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.9.1';
+window.CW_VERSION = '0.9.2';
 window.CW_BUILD   = '2026-05-21';
 
 window.CW_CHANGELOG = [
+  {
+    version: '0.9.2', date: '2026-05-21',
+    notes: [
+      '修正：快捷鈕 🔄/🗺 不再切換畫布模組，效果直接套用於當前模組（套圖/調整皆適用）',
+      '修正：調整模組下可一鍵轉 TWD97（宗地座標原位轉換，底圖即時對齊）',
+      '重構：showSidePanel() 只換側欄顯示，activeTab 保持不變',
+    ],
+  },
   {
     version: '0.9.1', date: '2026-05-21',
     notes: [

@@ -15,11 +15,12 @@ const FIT = {
 };
 
 const ADJ = {
-  data:    null,   // parse 結果（parcels）
-  result:  null,   // adjust 結果
-  layers:  { before: true, after: true, labels: true, regArea: true, calcArea: true, adjDiff: true, adjTol: true },
-  fileMap: {},     // {COA: File, BNP: File, PAR: File}
-  coaText: null,   // 調整後 COA 文字（下載用）
+  data:       null,   // parse 結果（parcels）
+  result:     null,   // adjust 結果
+  layers:     { before: true, after: true, labels: true, regArea: true, calcArea: true, adjDiff: true, adjTol: true },
+  fileMap:    {},     // {COA: File, BNP: File, PAR: File}
+  coaText:    null,   // 調整後 COA 文字（下載用）
+  crsIsWGS97: false,  // true after TWD67→TWD97 conversion
 };
 
 const MANUAL = {
@@ -680,17 +681,23 @@ for (const { id, key } of _adjExtraLayers) {
   if (el) el.onchange = () => { ADJ.layers[key] = el.checked; render(); };
 }
 
-// ── 分頁切換輔助 ─────────────────────────────────────────────────────────────
+// ── 側邊欄面板切換（不影響畫布渲染的 activeTab）────────────────────────────
+// showSidePanel: 只換側邊欄顯示的 tab-panel，畫布繼續渲染當前模組
+function showSidePanel(tabName) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById(`tab-${tabName}`);
+  if (panel) panel.classList.add('active');
+  updateBasemapCrsWarn();
+}
+
+// ── 分頁切換（同時切換畫布渲染模組 + 側邊欄）────────────────────────────────
 function switchTab(tabName) {
   activeTab = tabName;
   // Update toolbar tab buttons (only fit/adj are in toolbar now)
   document.querySelectorAll('.tb-btn[data-tab]').forEach(b => {
     b.classList.toggle('active', b.dataset.tab === tabName);
   });
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  const panel = document.getElementById(`tab-${tabName}`);
-  if (panel) panel.classList.add('active');
-  updateBasemapCrsWarn();
+  showSidePanel(tabName);
   if (extents) { initView(); render(); } else render();
 }
 
@@ -731,15 +738,16 @@ document.getElementById('btn-basemap-quick').onclick = () => {
   if (cb) cb.checked = BASEMAP.visible;
   // Highlight button when active
   document.getElementById('btn-basemap-quick').classList.toggle('active', BASEMAP.visible);
-  // Open basemap panel so user can tweak settings
-  switchTab('basemap');
-  render();
+  // Show basemap settings in side panel WITHOUT changing canvas module (activeTab unchanged)
+  showSidePanel('basemap');
+  render();  // re-render current module's canvas with/without basemap
 };
 
 document.getElementById('btn-crs-quick').onclick = () => {
-  document.getElementById('btn-crs-convert').click();
-  // Open CRS panel to show progress / result
-  switchTab('crs');
+  // 直接依畫布當前模組轉換，不切換 activeTab（畫布保持當前模組）
+  startCrsConvert(activeTab === 'adj' ? 'adj' : 'fit');
+  // 在側邊欄顯示 CRS 進度/結果，但不換畫布模組
+  showSidePanel('crs');
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1039,6 +1047,9 @@ function onAdjParsed(data) {
   renderAdjParcelList(data.parcels);
   document.getElementById('adj-section').style.display = '';
   setBtn('btn-adj-run', false, '▶ 執行調整');
+  // Enable CRS convert quick button for adj module
+  document.getElementById('btn-crs-convert').disabled = false;
+  document.getElementById('btn-crs-quick').disabled = false;
   showToast(`解析完成：${data.parcels.length} 宗地，其中 ${exceedsCount} 宗超出公差`);
   render();
 }
@@ -1154,114 +1165,175 @@ document.getElementById('btn-adj-gpkg').onclick = async () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  CRS MODULE (TWD67 → TWD97)
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// 統一入口：source = 'fit' | 'adj'（由呼叫方決定）
+function startCrsConvert(source) {
+  if (source === 'adj') {
+    if (!ADJ.data) { showToast('請先載入調整資料', true); return; }
+    if (ADJ.crsIsWGS97) { showToast('已是 TWD97 座標，無需重複轉換'); return; }
+
+    // 收集 ADJ 所有宗地座標（唯一點）
+    const ptMap = new Map();
+    for (const parcel of ADJ.data.parcels) {
+      for (const [y, x] of (parcel.coords || [])) {
+        const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
+        ptMap.set(key, [y, x]);
+      }
+    }
+    const pts = [...ptMap.values()];
+    setBtn('btn-crs-convert', true, '轉換中…');
+    progressShow('crs-progress');
+    worker.postMessage({ type: 'crs_convert', payload: { pts, source: 'adj' } });
+
+  } else {
+    // source === 'fit'
+    if (!FIT.data) { showToast('請先載入套圖資料', true); return; }
+    if (FIT.crsIsWGS97) { showToast('已是 TWD97 座標，無需重複轉換'); return; }
+
+    const ptMap = new Map();
+    for (const p of FIT.data.ref_pts) {
+      const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
+      ptMap.set(key, [p.y, p.x]);
+    }
+    for (const p of FIT.data.boundary_pts) {
+      const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
+      ptMap.set(key, [p.y, p.x]);
+    }
+    for (const [y1, x1, y2, x2] of FIT.data.segments) {
+      ptMap.set(`${y1.toFixed(6)}:${x1.toFixed(6)}`, [y1, x1]);
+      ptMap.set(`${y2.toFixed(6)}:${x2.toFixed(6)}`, [y2, x2]);
+    }
+    const pts = [...ptMap.values()];
+    setBtn('btn-crs-convert', true, '轉換中…');
+    progressShow('crs-progress');
+    worker.postMessage({ type: 'crs_convert', payload: { pts, source: 'fit' } });
+  }
+}
+
 document.getElementById('btn-crs-convert').onclick = () => {
-  if (!FIT.data) return;
-  if (FIT.crsIsWGS97) { showToast('已是 TWD97 座標，無需重複轉換'); return; }
-
-  // Collect all unique points from ref_pts + boundary_pts
-  const ptMap = new Map();
-  for (const p of FIT.data.ref_pts) {
-    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-    ptMap.set(key, [p.y, p.x]);
-  }
-  for (const p of FIT.data.boundary_pts) {
-    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-    ptMap.set(key, [p.y, p.x]);
-  }
-  // Also include segment endpoints
-  for (const [y1, x1, y2, x2] of FIT.data.segments) {
-    ptMap.set(`${y1.toFixed(6)}:${x1.toFixed(6)}`, [y1, x1]);
-    ptMap.set(`${y2.toFixed(6)}:${x2.toFixed(6)}`, [y2, x2]);
-  }
-
-  const pts = [...ptMap.values()];
-
-  setBtn('btn-crs-convert', true, '轉換中…');
-  progressShow('crs-progress');
-  worker.postMessage({ type: 'crs_convert', payload: { pts } });
+  // 側邊欄按鈕：依目前畫布模組決定轉換對象
+  startCrsConvert(activeTab === 'adj' ? 'adj' : 'fit');
 };
+
+// 輔助：從 result.pts（同順序陣列）建立 lookup map
+function _buildConvMap(orderedKeys, resultPts) {
+  const m = new Map();
+  resultPts.forEach(([N97, E97], i) => m.set(orderedKeys[i], [N97, E97]));
+  return m;
+}
 
 function onCrsResult(result) {
   progressHide('crs-progress');
   setBtn('btn-crs-convert', false, '🔄 一鍵轉 TWD97');
 
-  if (!FIT.data) return;
+  if (result.source === 'adj') {
+    // ── 調整模組 CRS 套用 ────────────────────────────────────────────────────
+    if (!ADJ.data) return;
 
-  // Build lookup: original [N,E] → converted [N97,E97]
-  // We need to re-run conversion on each point individually using the same ordering
-  // Instead, rebuild a map from input key → output
-  // The worker returns pts in same order as payload.pts
-  // We must re-collect in the same order to map back
+    // 重建同順序 keys（與 startCrsConvert 的收集順序一致）
+    const ptMap = new Map();
+    const orderedKeys = [];
+    for (const parcel of ADJ.data.parcels) {
+      for (const [y, x] of (parcel.coords || [])) {
+        const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
+        if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
+      }
+    }
+    const convMap = _buildConvMap(orderedKeys, result.pts);
 
-  const ptMap = new Map();
-  const orderedKeys = [];
-  for (const p of FIT.data.ref_pts) {
-    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-    if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
-  }
-  for (const p of FIT.data.boundary_pts) {
-    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-    if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
-  }
-  for (const [y1, x1, y2, x2] of FIT.data.segments) {
-    for (const [y, x] of [[y1,x1],[y2,x2]]) {
-      const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
+    // 套用到每個宗地座標
+    for (const parcel of ADJ.data.parcels) {
+      parcel.coords = parcel.coords.map(([y, x]) => {
+        const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
+        const c = convMap.get(key);
+        return c ? [c[0], c[1]] : [y, x];
+      });
+    }
+    // 若有調整後結果，也一併轉換
+    if (ADJ.result) {
+      for (const p of ADJ.result.adjusted_parcels) {
+        const applyCoords = (arr) => arr.map(([y, x]) => {
+          const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
+          const c = convMap.get(key);
+          return c ? [c[0], c[1]] : [y, x];
+        });
+        if (p.coords_before) p.coords_before = applyCoords(p.coords_before);
+        if (p.coords_after)  p.coords_after  = applyCoords(p.coords_after);
+      }
+    }
+
+    // 重算 extents
+    const allY = [], allX = [];
+    for (const parcel of ADJ.data.parcels)
+      for (const [y, x] of parcel.coords) { allY.push(y); allX.push(x); }
+    const pad2 = (Math.max(...allY) - Math.min(...allY)) * 0.05;
+    extents = {
+      minY: Math.min(...allY) - pad2, maxY: Math.max(...allY) + pad2,
+      minX: Math.min(...allX) - pad2, maxX: Math.max(...allX) + pad2,
+    };
+
+    ADJ.crsIsWGS97 = true;
+
+  } else {
+    // ── 套圖模組 CRS 套用 ────────────────────────────────────────────────────
+    if (!FIT.data) return;
+
+    const ptMap = new Map();
+    const orderedKeys = [];
+    for (const p of FIT.data.ref_pts) {
+      const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
       if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
     }
+    for (const p of FIT.data.boundary_pts) {
+      const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
+      if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
+    }
+    for (const [y1, x1, y2, x2] of FIT.data.segments) {
+      for (const [y, x] of [[y1,x1],[y2,x2]]) {
+        const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
+        if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
+      }
+    }
+    const convMap = _buildConvMap(orderedKeys, result.pts);
+
+    for (const p of FIT.data.ref_pts) {
+      const conv = convMap.get(`${p.y.toFixed(6)}:${p.x.toFixed(6)}`);
+      if (conv) { p.y = conv[0]; p.x = conv[1]; }
+    }
+    for (const p of FIT.data.boundary_pts) {
+      const conv = convMap.get(`${p.y.toFixed(6)}:${p.x.toFixed(6)}`);
+      if (conv) { p.y = conv[0]; p.x = conv[1]; }
+    }
+    FIT.data.segments = FIT.data.segments.map(([y1, x1, y2, x2]) => {
+      const c1 = convMap.get(`${y1.toFixed(6)}:${x1.toFixed(6)}`) || [y1, x1];
+      const c2 = convMap.get(`${y2.toFixed(6)}:${x2.toFixed(6)}`) || [y2, x2];
+      return [c1[0], c1[1], c2[0], c2[1]];
+    });
+
+    const allY = [], allX = [];
+    for (const [y1, x1, y2, x2] of FIT.data.segments) { allY.push(y1, y2); allX.push(x1, x2); }
+    for (const p of FIT.data.ref_pts)      { allY.push(p.y); allX.push(p.x); }
+    for (const p of FIT.data.boundary_pts) { allY.push(p.y); allX.push(p.x); }
+    const pad = (Math.max(...allY) - Math.min(...allY)) * 0.05;
+    extents = {
+      minY: Math.min(...allY) - pad, maxY: Math.max(...allY) + pad,
+      minX: Math.min(...allX) - pad, maxX: Math.max(...allX) + pad,
+    };
+
+    FIT.crsIsWGS97 = true;
+    FIT.result = null; // Clear fit result since coords changed
   }
 
-  // Map converted pts back
-  result.pts.forEach(([N97, E97], i) => {
-    ptMap.set(orderedKeys[i], [N97, E97]);
-  });
-
-  // Apply to ref_pts
-  for (const p of FIT.data.ref_pts) {
-    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-    const conv = ptMap.get(key);
-    if (conv) { p.y = conv[0]; p.x = conv[1]; }
-  }
-  // Apply to boundary_pts
-  for (const p of FIT.data.boundary_pts) {
-    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
-    const conv = ptMap.get(key);
-    if (conv) { p.y = conv[0]; p.x = conv[1]; }
-  }
-  // Apply to segments
-  FIT.data.segments = FIT.data.segments.map(([y1, x1, y2, x2]) => {
-    const k1 = `${y1.toFixed(6)}:${x1.toFixed(6)}`;
-    const k2 = `${y2.toFixed(6)}:${x2.toFixed(6)}`;
-    const c1 = ptMap.get(k1) || [y1, x1];
-    const c2 = ptMap.get(k2) || [y2, x2];
-    return [c1[0], c1[1], c2[0], c2[1]];
-  });
-
-  // Recalculate extents
-  const allY = [], allX = [];
-  for (const [y1, x1, y2, x2] of FIT.data.segments) { allY.push(y1, y2); allX.push(x1, x2); }
-  for (const p of FIT.data.ref_pts)      { allY.push(p.y); allX.push(p.x); }
-  for (const p of FIT.data.boundary_pts) { allY.push(p.y); allX.push(p.x); }
-  const pad = (Math.max(...allY) - Math.min(...allY)) * 0.05;
-  extents = {
-    minY: Math.min(...allY) - pad, maxY: Math.max(...allY) + pad,
-    minX: Math.min(...allX) - pad, maxX: Math.max(...allX) + pad,
-  };
-
-  FIT.crsIsWGS97 = true;
-  FIT.result = null; // Clear fit result since coords changed
-
-  // Show result section
+  // ── 共用 UI 更新 ─────────────────────────────────────────────────────────
   const resEl = document.getElementById('crs-result-section');
   document.getElementById('crs-dn').textContent    = (result.mean_dn >= 0 ? '+' : '') + result.mean_dn.toFixed(3) + ' m';
   document.getElementById('crs-de').textContent    = (result.mean_de >= 0 ? '+' : '') + result.mean_de.toFixed(3) + ' m';
   document.getElementById('crs-count').textContent = result.pts.length + ' 點';
   resEl.style.display = '';
 
-  // Update from-badge
   const badge = document.getElementById('crs-from-badge');
   if (badge) { badge.textContent = 'TWD97'; badge.className = 'crs-badge twd97'; }
 
-  // Disable & visually mark quick button as done
   const quickBtn = document.getElementById('btn-crs-quick');
   if (quickBtn) { quickBtn.disabled = true; quickBtn.title = '已是 TWD97 座標'; }
 

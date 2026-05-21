@@ -105,6 +105,8 @@ self.onmessage = async (e) => {
         pyodide.globals.set('crs_pts_json', JSON.stringify(payload.pts));
         pyodide.runPython(crsScript);
         const result = JSON.parse(pyodide.globals.get('result_json'));
+        // Pass source back so app.js knows which module to apply results to
+        result.source = payload.source || 'fit';
         self.postMessage({ type: 'crs_result', payload: result });
         break;
       }
