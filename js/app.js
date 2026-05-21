@@ -33,11 +33,19 @@ const MANUAL = {
   history:    [],          // undo stack：每次移動前 push coords 快照（最多 80 步）
 };
 
-const BASEMAP = { visible: false, opacity: 70, provider: 'nlsc-photo' };
+const BASEMAP = { visible: false, opacity: 70, provider: 'google-satellite' };
 
 const TILE_PROVIDERS = {
+  // Google (unofficial tile URLs — widely used in GIS but against Google ToS)
+  'google-satellite': (z,x,y) => `https://mt0.google.com/vt/lyrs=s&x=${x}&y=${y}&z=${z}`,
+  'google-hybrid':    (z,x,y) => `https://mt0.google.com/vt/lyrs=y&x=${x}&y=${y}&z=${z}`,
+  'google-map':       (z,x,y) => `https://mt0.google.com/vt/lyrs=m&x=${x}&y=${y}&z=${z}`,
+  // Esri World Imagery (官方免費，高解析度衛星)
+  'esri-satellite':   (z,x,y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`,
+  // 國土測繪中心 (台灣政府官方，無 CORS 問題)
   'nlsc-photo': (z,x,y) => `https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/${z}/${y}/${x}`,
   'nlsc-map':   (z,x,y) => `https://wmts.nlsc.gov.tw/wmts/EMAP5/default/GoogleMapsCompatible/${z}/${y}/${x}`,
+  // OpenStreetMap
   'osm':        (z,x,y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
 };
 
