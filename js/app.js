@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   CadastralWorkbench  app.js  v0.5
+   CadastralWorkbench  app.js  v0.6
    純前端：Pyodide Worker + Canvas 渲染（移植自 fit-cadastral webapp）
    ══════════════════════════════════════════════════════════════════════════ */
 
@@ -16,7 +16,7 @@ const FIT = {
 const ADJ = {
   data:    null,   // parse 結果（parcels）
   result:  null,   // adjust 結果
-  layers:  { before: true, after: true, labels: true },
+  layers:  { before: true, after: true, labels: true, regArea: false, calcArea: false, adjDiff: false, adjTol: false },
   fileMap: {},     // {COA: File, BNP: File, PAR: File}
   coaText: null,   // 調整後 COA 文字（下載用）
 };
@@ -240,9 +240,13 @@ function renderAdj(W, H) {
     }
   }
 
-  // 宗地標籤
-  if (ADJ.layers.labels) {
-    ctx.font = `${Math.max(9, Math.min(11, view.scale * 0.8))}px Consolas`;
+  // 宗地標籤 + 面積資訊層
+  const showExtra = ADJ.layers.regArea || ADJ.layers.calcArea || ADJ.layers.adjDiff || ADJ.layers.adjTol;
+  if (ADJ.layers.labels || showExtra) {
+    const adjMap = {};
+    if (result) {
+      for (const ap of result.adjusted_parcels) adjMap[`${ap.main}-${ap.sub}`] = ap;
+    }
     ctx.textAlign = 'center';
     for (const p of parcels) {
       if (!p.coords || p.coords.length < 2) continue;
@@ -250,11 +254,38 @@ function renderAdj(W, H) {
       const cx_ = p.coords.reduce((s, c) => s + c[1], 0) / p.coords.length;
       const [sx, sy] = worldToScreen(cy_, cx_);
       const col = p.exceeds ? '#f05252' : '#3ecf6e';
-      ctx.fillStyle = 'rgba(10,12,18,.7)';
-      const tw = ctx.measureText(p.label).width;
-      ctx.fillRect(sx - tw / 2 - 3, sy - 10, tw + 6, 14);
-      ctx.fillStyle = col;
-      ctx.fillText(p.label, sx, sy);
+      let yOff = 0;
+
+      if (ADJ.layers.labels) {
+        ctx.font = `${Math.max(9, Math.min(11, view.scale * 0.8))}px Consolas`;
+        const tw = ctx.measureText(p.label).width;
+        ctx.fillStyle = 'rgba(10,12,18,.7)';
+        ctx.fillRect(sx - tw / 2 - 3, sy - 10, tw + 6, 14);
+        ctx.fillStyle = col;
+        ctx.fillText(p.label, sx, sy);
+        yOff = 16;
+      }
+
+      if (showExtra) {
+        const ap = adjMap[p.label];
+        const infoLines = [];
+        if (ADJ.layers.regArea)  infoLines.push(`登記: ${p.reg.toFixed(2)} m²`);
+        if (ADJ.layers.calcArea) infoLines.push(`計算: ${(ap ? ap.area_after : p.dig).toFixed(2)} m²`);
+        if (ADJ.layers.adjDiff)  infoLines.push(`較差: ${(ap ? ap.diff_after : p.diff).toFixed(2)} m²`);
+        if (ADJ.layers.adjTol)   infoLines.push(`公差: ±${p.tol.toFixed(2)} m²`);
+
+        const infoFs = Math.max(8, Math.min(10, view.scale * 0.7));
+        ctx.font = `${infoFs}px Consolas`;
+        const lineH = infoFs + 4;
+        infoLines.forEach((line, i) => {
+          const tw2 = ctx.measureText(line).width;
+          const lineY = sy + yOff + i * lineH;
+          ctx.fillStyle = 'rgba(10,12,18,.75)';
+          ctx.fillRect(sx - tw2 / 2 - 2, lineY - infoFs, tw2 + 4, infoFs + 3);
+          ctx.fillStyle = '#b0b8c8';
+          ctx.fillText(line, sx, lineY);
+        });
+      }
     }
   }
 }
@@ -325,6 +356,24 @@ function zoom(f) {
   view.tx = cx_ + (view.tx - cx_) * f;
   view.ty = cy_ + (view.ty - cy_) * f;
   view.scale *= f;
+  render();
+}
+
+function zoomToParcel(coords) {
+  if (!coords || !coords.length || !extents) return;
+  const ys = coords.map(c => c[0]);
+  const xs = coords.map(c => c[1]);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const padM = Math.max(maxX - minX, maxY - minY) * 0.3 + 5;
+  const rX = (maxX - minX) + padM * 2 || 1;
+  const rY = (maxY - minY) + padM * 2 || 1;
+  const W = canvas.width - 80, H = canvas.height - 80;
+  view.scale = Math.min(W / rX, H / rY);
+  const cmy = (minY + maxY) / 2;
+  const cmx = (minX + maxX) / 2;
+  view.tx = canvas.width  / 2 - (cmx - extents.minX) * view.scale;
+  view.ty = canvas.height / 2 - (extents.maxY - cmy) * view.scale;
   render();
 }
 
@@ -412,6 +461,16 @@ for (const key of Object.keys(FIT.layers)) {
 }
 for (const key of ['before', 'after', 'labels']) {
   const el = document.getElementById(`adj-layer-${key}`);
+  if (el) el.onchange = () => { ADJ.layers[key] = el.checked; render(); };
+}
+const _adjExtraLayers = [
+  { id: 'adj-layer-reg-area',  key: 'regArea'  },
+  { id: 'adj-layer-calc-area', key: 'calcArea' },
+  { id: 'adj-layer-diff',      key: 'adjDiff'  },
+  { id: 'adj-layer-tol',       key: 'adjTol'   },
+];
+for (const { id, key } of _adjExtraLayers) {
+  const el = document.getElementById(id);
   if (el) el.onchange = () => { ADJ.layers[key] = el.checked; render(); };
 }
 
@@ -739,12 +798,22 @@ function renderAdjParcelList(parcels) {
   const items = parcels.filter(p => p.exceeds);
   if (!items.length) { list.innerHTML = '<div style="color:var(--green);font-size:.75rem">所有宗地均在公差內</div>'; return; }
   list.innerHTML = items.map(p => `
-    <div class="parcel-row exceeds">
+    <div class="parcel-row exceeds" data-main="${p.main}" data-sub="${p.sub}">
       <div class="status-dot"></div>
       <input type="checkbox" id="chk-${p.main}-${p.sub}">
       <label for="chk-${p.main}-${p.sub}">${p.label}</label>
       <span style="margin-left:auto;color:var(--muted);font-size:.7rem">差${p.diff.toFixed(0)} m²/公差${p.tol.toFixed(0)}</span>
     </div>`).join('');
+
+  list.querySelectorAll('.parcel-row').forEach(row => {
+    const main_ = parseInt(row.dataset.main, 10);
+    const sub_  = parseInt(row.dataset.sub,  10);
+    const p = parcels.find(q => q.main === main_ && q.sub === sub_);
+    if (!p) return;
+    row.querySelector('label').addEventListener('click', () => {
+      if (p.coords && extents) zoomToParcel(p.coords);
+    });
+  });
 }
 
 document.getElementById('btn-adj-run').onclick = () => {

@@ -1,8 +1,15 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.5';
-window.CW_BUILD   = '2026-05-19';
+window.CW_VERSION = '0.6';
+window.CW_BUILD   = '2026-05-21';
 
 window.CW_CHANGELOG = [
+  {
+    version: '0.6', date: '2026-05-21',
+    notes: [
+      '點擊地號清單中的地號標籤，地籍圖即 Zoom In 到該宗地',
+      '新增圖層顯示開關：登記面積、計算面積、較差、公差（即時標注於地籍圖）',
+    ],
+  },
   {
     version: '0.5', date: '2026-05-19',
     notes: [
