@@ -1,8 +1,16 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.7';
+window.CW_VERSION = '0.8';
 window.CW_BUILD   = '2026-05-21';
 
 window.CW_CHANGELOG = [
+  {
+    version: '0.8', date: '2026-05-21',
+    notes: [
+      '調整模組：登記面積、計算面積、較差、公差標示預設全開',
+      '手動調整新增撤銷功能（Ctrl+Z / ⎌ 上一步按鈕，最多 80 步）',
+      '手動調整新增「原始狀態」按鈕：回到自動調整前的原始 COA 座標',
+    ],
+  },
   {
     version: '0.7', date: '2026-05-21',
     notes: [

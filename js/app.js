@@ -16,7 +16,7 @@ const FIT = {
 const ADJ = {
   data:    null,   // parse 結果（parcels）
   result:  null,   // adjust 結果
-  layers:  { before: true, after: true, labels: true, regArea: false, calcArea: false, adjDiff: false, adjTol: false },
+  layers:  { before: true, after: true, labels: true, regArea: true, calcArea: true, adjDiff: true, adjTol: true },
   fileMap: {},     // {COA: File, BNP: File, PAR: File}
   coaText: null,   // 調整後 COA 文字（下載用）
 };
@@ -28,6 +28,7 @@ const MANUAL = {
   hover:      null,
   coords:     {},          // label → [[y,x], ...]  working coordinates
   areas:      {},          // label → { area, reg, tol, diff, ok }
+  history:    [],          // undo stack：每次移動前 push coords 快照（最多 80 步）
 };
 
 let activeTab  = 'fit';
@@ -1167,6 +1168,7 @@ function enterManualMode() {
   initManualCoords();
   MANUAL.active     = true;
   MANUAL.selections = [];
+  MANUAL.history    = [];
   MANUAL.hover      = null;
   MANUAL.step       = parseFloat(document.getElementById('manual-step')?.value ?? '0.01');
 
@@ -1195,6 +1197,7 @@ function exitManualMode(apply) {
   }
   MANUAL.active     = false;
   MANUAL.selections = [];
+  MANUAL.history    = [];
   MANUAL.hover      = null;
   document.getElementById('manual-toolbar').style.display = 'none';
   document.getElementById('hint').style.display           = '';
@@ -1260,6 +1263,42 @@ function selKey(s) {
   return `parcel:${s.label}`;
 }
 
+// ── 撤銷 (Undo) 相關 ─────────────────────────────────────────────────────────
+function snapshotCoords() {
+  const snap = {};
+  for (const [k, v] of Object.entries(MANUAL.coords)) snap[k] = v.map(c => [c[0], c[1]]);
+  return snap;
+}
+
+function pushHistory() {
+  MANUAL.history.push(snapshotCoords());
+  if (MANUAL.history.length > 80) MANUAL.history.shift();
+}
+
+function undoManual() {
+  if (!MANUAL.history.length) { showToast('已無上一步可回復', false); return; }
+  const snap = MANUAL.history.pop();
+  for (const [k, v] of Object.entries(snap)) MANUAL.coords[k] = v;
+  updateManualAreas();
+  render();
+  showToast(`已回到上一步（還可再退 ${MANUAL.history.length} 步）`);
+}
+
+/** 回復到自動調整前的原始座標（ADJ.data.parcels.coords，未經 Python 調整） */
+function resetToOriginalCoords() {
+  if (!ADJ.data) return;
+  MANUAL.coords = {};
+  for (const p of ADJ.data.parcels) {
+    if (p.coords) MANUAL.coords[p.label] = p.coords.map(c => [c[0], c[1]]);
+  }
+  MANUAL.history    = [];
+  MANUAL.selections = [];
+  updateManualAreas();
+  render();
+  showToast('已回復至自動調整前原始狀態');
+  document.getElementById('manual-sel-info').textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
+}
+
 // ── 移動選取（用箭頭鍵，支援多選） ──────────────────────────────────────────
 const EPS_SHARE = 0.001; // 共用界址點判斷距離（公尺）
 
@@ -1276,6 +1315,8 @@ function movePtInAll(origY, origX, dy, dx) {
 
 function moveManualSelection(dy, dx) {
   if (!MANUAL.selections.length) return;
+
+  pushHistory(); // 移動前先存快照，供 Ctrl+Z 回退
 
   // 收集所有「待移動點」的原始位置（去重，避免同一點被多個選取項帶到後重複移動）
   // 用 "y:x" 字串做 key 去重
@@ -1430,9 +1471,13 @@ document.getElementById('btn-manual-step') && (document.getElementById('manual-s
   MANUAL.step = parseFloat(e.target.value);
 });
 
+document.getElementById('btn-manual-undo').onclick   = () => undoManual();
+document.getElementById('btn-manual-origin').onclick = () => resetToOriginalCoords();
+
 document.getElementById('btn-manual-reset').onclick = () => {
   initManualCoords();
   MANUAL.selections = [];
+  MANUAL.history    = [];
   document.getElementById('manual-sel-info').textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
   render();
   showToast('已重設為自動調整結果');
@@ -1451,8 +1496,12 @@ document.getElementById('btn-manual-exit').onclick    = () => exitManualMode(fal
 document.addEventListener('keydown', e => {
   if (!MANUAL.active) return;
 
-  if (e.key === 'Escape') {
-    exitManualMode(false);
+  if (e.key === 'Escape') { exitManualMode(false); return; }
+
+  // Ctrl+Z → 撤銷上一動
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+    e.preventDefault();
+    undoManual();
     return;
   }
 

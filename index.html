@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CadastralWorkbench</title>
 <link rel="stylesheet" href="css/style.css">
-<script src="js/version.js?v=0.6"></script>
+<script src="js/version.js?v=0.8"></script>
 <script>
 /* 頁面最早期就攔截，防止瀏覽器把拖放的資料夾當成導航目標 */
 ['dragover','dragenter','drop'].forEach(function(evt) {
@@ -19,7 +19,7 @@
 <header>
   <span style="font-size:1.3rem">⚡</span>
   <h1>CadastralWorkbench</h1>
-  <span class="badge" id="app-version">v0.7</span>
+  <span class="badge" id="app-version">v0.8</span>
   <div class="spacer"></div>
   <button id="btn-download">⬇ 下載結果</button>
 </header>
@@ -177,10 +177,10 @@
         <div class="toggle-row"><span>調整前輪廓（紅）</span><label class="toggle"><input id="adj-layer-before" type="checkbox" checked><span class="slider"></span></label></div>
         <div class="toggle-row"><span>調整後輪廓（綠）</span><label class="toggle"><input id="adj-layer-after" type="checkbox" checked><span class="slider"></span></label></div>
         <div class="toggle-row"><span>宗地標籤</span><label class="toggle"><input id="adj-layer-labels" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>登記面積</span><label class="toggle"><input id="adj-layer-reg-area" type="checkbox"><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>計算面積</span><label class="toggle"><input id="adj-layer-calc-area" type="checkbox"><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>較差</span><label class="toggle"><input id="adj-layer-diff" type="checkbox"><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>公差</span><label class="toggle"><input id="adj-layer-tol" type="checkbox"><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>登記面積</span><label class="toggle"><input id="adj-layer-reg-area" type="checkbox" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>計算面積</span><label class="toggle"><input id="adj-layer-calc-area" type="checkbox" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>較差</span><label class="toggle"><input id="adj-layer-diff" type="checkbox" checked><span class="slider"></span></label></div>
+        <div class="toggle-row"><span>公差</span><label class="toggle"><input id="adj-layer-tol" type="checkbox" checked><span class="slider"></span></label></div>
       </div>
 
       <!-- 調整圖例 -->
@@ -227,7 +227,9 @@
           <option value="0.1">10 cm</option>
         </select>
       </label>
-      <button class="btn-tiny" id="btn-manual-reset">↺ 重設</button>
+      <button class="btn-tiny" id="btn-manual-undo" title="Ctrl+Z">⎌ 上一步</button>
+      <button class="btn-tiny" id="btn-manual-reset" title="回到自動調整結果">↺ 自動結果</button>
+      <button class="btn-tiny" id="btn-manual-origin" title="回到尚未執行自動調整的原始狀態">⬛ 原始狀態</button>
       <button class="btn-tiny btn-manual-ok" id="btn-manual-confirm">✓ 套用</button>
       <button class="btn-tiny" id="btn-manual-exit">✕ 離開</button>
     </div>
@@ -249,8 +251,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="js/gpkg_writer.js?v=0.7"></script>
-<script src="js/dxf_writer.js?v=0.7"></script>
-<script src="js/app.js?v=0.7"></script>
+<script src="js/gpkg_writer.js?v=0.8"></script>
+<script src="js/dxf_writer.js?v=0.8"></script>
+<script src="js/app.js?v=0.8"></script>
 </body>
 </html>
