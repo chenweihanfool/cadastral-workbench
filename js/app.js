@@ -1067,7 +1067,7 @@ function hitTestManual(mx, my) {
   // 1. 界址點優先
   for (const [label, coords] of Object.entries(MANUAL.coords)) {
     for (let idx = 0; idx < coords.length; idx++) {
-      const [sy, sx] = worldToScreen(coords[idx][0], coords[idx][1]);
+      const [sx, sy] = worldToScreen(coords[idx][0], coords[idx][1]);
       if (Math.hypot(mx - sx, my - sy) <= PT_THRESH) {
         return { type: 'point', label, idx, y: coords[idx][0], x: coords[idx][1] };
       }
@@ -1079,8 +1079,8 @@ function hitTestManual(mx, my) {
     const n = coords.length;
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
-      const [sy1, sx1] = worldToScreen(coords[i][0], coords[i][1]);
-      const [sy2, sx2] = worldToScreen(coords[j][0], coords[j][1]);
+      const [sx1, sy1] = worldToScreen(coords[i][0], coords[i][1]);
+      const [sx2, sy2] = worldToScreen(coords[j][0], coords[j][1]);
       if (distToSegPx(mx, my, sx1, sy1, sx2, sy2) <= SEG_THRESH) {
         return { type: 'edge', label, i, j };
       }
@@ -1297,8 +1297,8 @@ function renderAdjManual(W, H) {
   function highlightEdge(label, i, j, strokeCol) {
     const coords = MANUAL.coords[label];
     if (!coords) return;
-    const [sy1, sx1] = worldToScreen(coords[i][0], coords[i][1]);
-    const [sy2, sx2] = worldToScreen(coords[j][0], coords[j][1]);
+    const [sx1, sy1] = worldToScreen(coords[i][0], coords[i][1]);
+    const [sx2, sy2] = worldToScreen(coords[j][0], coords[j][1]);
     ctx.strokeStyle = strokeCol; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(sx1, sy1); ctx.lineTo(sx2, sy2); ctx.stroke();
   }
@@ -1306,7 +1306,7 @@ function renderAdjManual(W, H) {
   function highlightPt(label, idx, strokeCol) {
     const coords = MANUAL.coords[label];
     if (!coords || idx >= coords.length) return;
-    const [sy, sx] = worldToScreen(coords[idx][0], coords[idx][1]);
+    const [sx, sy] = worldToScreen(coords[idx][0], coords[idx][1]);
     ctx.strokeStyle = strokeCol; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(sx, sy, 7, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = strokeCol.replace(/[\d.]+\)/, '0.4)');
@@ -1325,7 +1325,7 @@ function renderAdjManual(W, H) {
       highlightPt(sel.label, sel.idx, '#a78bfa');
       const coords = MANUAL.coords[sel.label];
       if (coords) {
-        const [sy, sx] = worldToScreen(coords[sel.idx][0], coords[sel.idx][1]);
+        const [sx, sy] = worldToScreen(coords[sel.idx][0], coords[sel.idx][1]);
         ctx.fillStyle = '#a78bfa'; ctx.font = '10px Consolas'; ctx.textAlign = 'left';
         ctx.fillText(`N${coords[sel.idx][0].toFixed(3)}`, sx + 10, sy - 4);
         ctx.fillText(`E${coords[sel.idx][1].toFixed(3)}`, sx + 10, sy + 8);
@@ -1347,7 +1347,7 @@ function renderAdjManual(W, H) {
   ctx.fillStyle = 'rgba(200,200,255,.6)';
   for (const coords of Object.values(MANUAL.coords)) {
     for (const [wy, wx] of coords) {
-      const [sy, sx] = worldToScreen(wy, wx);
+      const [sx, sy] = worldToScreen(wy, wx);
       ctx.beginPath(); ctx.arc(sx, sy, 3, 0, Math.PI * 2); ctx.fill();
     }
   }
