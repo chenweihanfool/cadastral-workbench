@@ -207,16 +207,18 @@ function renderBasemap() {
         }
       } else {
         // Kick off fetch
+        // Note: no crossOrigin — NLSC/OSM tiles don't send CORS headers.
+        // Canvas becomes tainted but we only drawImage (never readPixels), so that's fine.
         _tileCache.set(key, 'loading');
         const url = providerFn(z, tx, ty);
         const img = new Image();
-        img.crossOrigin = 'anonymous';
         img.onload = () => {
           _tileCache.set(key, img);
           render();
         };
         img.onerror = () => {
-          _tileCache.set(key, 'error');
+          // Don't permanently cache errors — allow retry on next render cycle
+          _tileCache.delete(key);
         };
         img.src = url;
       }
