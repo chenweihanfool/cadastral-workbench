@@ -4,6 +4,7 @@ importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js');
 let pyodide   = null;
 let fitScript = null;
 let adjScript = null;
+let crsScript = null;
 
 // Python globals persisted between runPython() calls in the same interpreter
 // segs / ref_pts / boundary_pts / cy / cx  — kept alive after 'parse' call
@@ -17,14 +18,17 @@ async function _init() {
 
   // Fetch Python scripts relative to the repo root
   const base = self.location.href.replace(/\/workers\/[^/]+$/, '');
-  const [fRes, aRes] = await Promise.all([
+  const [fRes, aRes, cRes] = await Promise.all([
     fetch(`${base}/python/fit_cadastral.py`),
     fetch(`${base}/python/adjust_cadastral.py`),
+    fetch(`${base}/python/crs_transform.py`),
   ]);
   if (!fRes.ok) throw new Error('Cannot fetch fit_cadastral.py');
   if (!aRes.ok) throw new Error('Cannot fetch adjust_cadastral.py');
+  if (!cRes.ok) throw new Error('Cannot fetch crs_transform.py');
   fitScript = await fRes.text();
   adjScript = await aRes.text();
+  crsScript = await cRes.text();
 
   self.postMessage({ type: 'ready' });
 }
@@ -92,6 +96,16 @@ self.onmessage = async (e) => {
         pyodide.runPython(adjScript);
         const result = JSON.parse(pyodide.globals.get('result_json'));
         self.postMessage({ type: 'adj_run_result', payload: result });
+        break;
+      }
+
+      // ── CRS: TWD67 → TWD97 conversion ────────────────────────────────────
+      case 'crs_convert': {
+        pyodide.globals.set('crs_mode', 'convert');
+        pyodide.globals.set('crs_pts_json', JSON.stringify(payload.pts));
+        pyodide.runPython(crsScript);
+        const result = JSON.parse(pyodide.globals.get('result_json'));
+        self.postMessage({ type: 'crs_result', payload: result });
         break;
       }
 

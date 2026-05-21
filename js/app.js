@@ -1,6 +1,6 @@
 /* ══════════════════════════════════════════════════════════════════════════
-   CadastralWorkbench  app.js  v0.7
-   純前端：Pyodide Worker + Canvas 渲染（移植自 fit-cadastral webapp）
+   CadastralWorkbench  app.js  v0.9
+   純前端：Pyodide Worker + Canvas 渲染
    ══════════════════════════════════════════════════════════════════════════ */
 
 // ── 全域狀態 ─────────────────────────────────────────────────────────────────
@@ -11,6 +11,7 @@ const FIT = {
   selectedPt: null,
   layers: { original: true, fitted: true, residuals: true, labels: true, boundary: true },
   fileMap:    {},     // {D14: File, D2C: File, D2D: File, D2B: File}
+  crsIsWGS97: false,  // true after TWD67→TWD97 conversion
 };
 
 const ADJ = {
@@ -31,6 +32,16 @@ const MANUAL = {
   history:    [],          // undo stack：每次移動前 push coords 快照（最多 80 步）
 };
 
+const BASEMAP = { visible: false, opacity: 70, provider: 'nlsc-photo' };
+
+const TILE_PROVIDERS = {
+  'nlsc-photo': (z,x,y) => `https://wmts.nlsc.gov.tw/wmts/PHOTO2/default/GoogleMapsCompatible/${z}/${y}/${x}`,
+  'nlsc-map':   (z,x,y) => `https://wmts.nlsc.gov.tw/wmts/EMAP5/default/GoogleMapsCompatible/${z}/${y}/${x}`,
+  'osm':        (z,x,y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+};
+
+const _tileCache = new Map();
+
 let activeTab  = 'fit';
 let pyodideReady = false;
 
@@ -48,6 +59,15 @@ function worldToScreen(wy, wx) {
     (extents.maxY - wy) * view.scale + view.ty,
   ];
 }
+
+function screenToWorld(sx, sy) {
+  if (!extents) return null;
+  return {
+    x: (sx - view.tx) / view.scale + extents.minX,
+    y: extents.maxY - (sy - view.ty) / view.scale,
+  };
+}
+
 function initView() {
   if (!extents) return;
   const pad = 40;
@@ -74,6 +94,137 @@ function residualColor(d) {
   return '#f05252';
 }
 
+// ── TWD97/TM2 → WGS84 lat/lon (GRS80) ───────────────────────────────────────
+const _GRS80_a   = 6378137.0;
+const _GRS80_e2  = 2/298.257222101 - (1/298.257222101)**2;
+const _TM2_CM    = Math.PI * 121 / 180;
+const _TM2_K0    = 0.9999;
+const _TM2_FE    = 250000;
+const _TM2_FN    = 0;
+
+function twd97ToLatLon(N, E) {
+  const a = _GRS80_a, e2 = _GRS80_e2;
+  const e4 = e2*e2, e6 = e2*e4;
+  const e1 = (1 - Math.sqrt(1-e2)) / (1 + Math.sqrt(1-e2));
+  const M  = (N - _TM2_FN) / _TM2_K0;
+  const mu = M / (a*(1 - e2/4 - 3*e4/64 - 5*e6/256));
+  const phi1 = mu
+    + (3*e1/2 - 27*e1**3/32)*Math.sin(2*mu)
+    + (21*e1**2/16 - 55*e1**4/32)*Math.sin(4*mu)
+    + (151*e1**3/96)*Math.sin(6*mu)
+    + (1097*e1**4/512)*Math.sin(8*mu);
+  const n1  = a / Math.sqrt(1 - e2*Math.sin(phi1)**2);
+  const r1  = a*(1-e2) / Math.pow(1 - e2*Math.sin(phi1)**2, 1.5);
+  const t1  = Math.tan(phi1)**2;
+  const c1  = e2/(1-e2)*Math.cos(phi1)**2;
+  const D   = (E - _TM2_FE) / (n1*_TM2_K0);
+  const lat = phi1 - (n1*Math.tan(phi1)/r1)*(D**2/2
+    - (5+3*t1+10*c1-4*c1**2-9*e2/(1-e2))*D**4/24
+    + (61+90*t1+298*c1+45*t1**2-252*e2/(1-e2)-3*c1**2)*D**6/720);
+  const lon = _TM2_CM + (D - (1+2*t1+c1)*D**3/6
+    + (5-2*c1+28*t1-3*c1**2+8*e2/(1-e2)+24*t1**2)*D**5/120) / Math.cos(phi1);
+  return { lat: lat * 180/Math.PI, lon: lon * 180/Math.PI };
+}
+
+function latLonToTile(lat, lon, z) {
+  const n = Math.pow(2, z);
+  const x = Math.floor((lon + 180) / 360 * n);
+  const latR = lat * Math.PI / 180;
+  const y = Math.floor((1 - Math.log(Math.tan(latR) + 1/Math.cos(latR)) / Math.PI) / 2 * n);
+  return { x, y };
+}
+
+function tileNWLatLon(tx, ty, z) {
+  const n = Math.pow(2, z);
+  const lon = tx / n * 360 - 180;
+  const latR = Math.atan(Math.sinh(Math.PI * (1 - 2*ty/n)));
+  return { lat: latR * 180/Math.PI, lon };
+}
+
+// ── Basemap rendering ─────────────────────────────────────────────────────────
+function renderBasemap() {
+  if (!BASEMAP.visible || !extents) return;
+  const W = canvas.width, H = canvas.height;
+
+  // Viewport corners in world coords
+  const sw = screenToWorld(0, H);
+  const ne = screenToWorld(W, 0);
+  if (!sw || !ne) return;
+
+  // Convert to lat/lon (TWD97 assumed)
+  const llSW = twd97ToLatLon(sw.y, sw.x);
+  const llNE = twd97ToLatLon(ne.y, ne.x);
+
+  const lonSpan = llNE.lon - llSW.lon;
+  if (lonSpan <= 0) return;
+
+  // Determine zoom
+  const rawZ = Math.log2(360 / lonSpan * W / 256);
+  const z = Math.max(14, Math.min(20, Math.round(rawZ)));
+
+  // Tile range
+  const tileSW = latLonToTile(llSW.lat, llSW.lon, z);
+  const tileNE = latLonToTile(llNE.lat, llNE.lon, z);
+  const txMin = Math.max(0, tileNE.x - 1);
+  const txMax = Math.min(Math.pow(2, z) - 1, tileSW.x + 1);
+  const tyMin = Math.max(0, tileNE.y - 1);
+  const tyMax = Math.min(Math.pow(2, z) - 1, tileSW.y + 1);
+
+  // Limit tile count to avoid flooding
+  if ((txMax - txMin + 1) * (tyMax - tyMin + 1) > 64) return;
+
+  const providerFn = TILE_PROVIDERS[BASEMAP.provider] || TILE_PROVIDERS['nlsc-photo'];
+  const savedAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = BASEMAP.opacity / 100;
+
+  for (let tx = txMin; tx <= txMax; tx++) {
+    for (let ty = tyMin; ty <= tyMax; ty++) {
+      const key = `${z}/${tx}/${ty}/${BASEMAP.provider}`;
+      const cached = _tileCache.get(key);
+
+      if (cached === 'loading' || cached === 'error') continue;
+
+      if (cached instanceof HTMLImageElement) {
+        // Compute screen position of NW corner of tile
+        const nw = tileNWLatLon(tx, ty, z);
+        const se = tileNWLatLon(tx+1, ty+1, z);
+
+        // Convert NW/SE lat-lon → TM2 N/E (approximate by inverting twd97ToLatLon)
+        // We use a simple Mercator-based screen mapping instead:
+        // Project via twd97ToLatLon inverse is expensive — use pixel math directly from
+        // lat/lon → world-TM2 is not straightforward. Instead, compute screen px directly
+        // from lat/lon using the known viewport mapping.
+        const nwSx = ((nw.lon - llSW.lon) / lonSpan) * W;
+        const seSx = ((se.lon - llSW.lon) / lonSpan) * W;
+        const latSpan = llNE.lat - llSW.lat;
+        const nwSy = ((llNE.lat - nw.lat) / latSpan) * H;
+        const seSy = ((llNE.lat - se.lat) / latSpan) * H;
+        const tw = seSx - nwSx;
+        const th = seSy - nwSy;
+        if (tw > 0 && th > 0) {
+          ctx.drawImage(cached, nwSx, nwSy, tw, th);
+        }
+      } else {
+        // Kick off fetch
+        _tileCache.set(key, 'loading');
+        const url = providerFn(z, tx, ty);
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          _tileCache.set(key, img);
+          render();
+        };
+        img.onerror = () => {
+          _tileCache.set(key, 'error');
+        };
+        img.src = url;
+      }
+    }
+  }
+
+  ctx.globalAlpha = savedAlpha;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  RENDER
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -85,8 +236,24 @@ function render() {
   ctx.fillStyle = '#0c0e16';
   ctx.fillRect(0, 0, W, H);
 
-  if (activeTab === 'fit') renderFit(W, H);
-  else                     renderAdj(W, H);
+  // Basemap is rendered first (behind everything)
+  renderBasemap();
+
+  if (activeTab === 'fit' || activeTab === 'crs' || activeTab === 'basemap') {
+    renderFit(W, H);
+  } else {
+    renderAdj(W, H);
+  }
+
+  updateStatusBar();
+}
+
+function updateStatusBar() {
+  const zoomEl  = document.getElementById('status-zoom');
+  const modEl   = document.getElementById('status-module');
+  if (zoomEl) zoomEl.textContent = '×' + view.scale.toFixed(2);
+  const modNames = { fit: '套圖', adj: '調整', crs: 'TWD97', basemap: '底圖' };
+  if (modEl) modEl.textContent = modNames[activeTab] || activeTab;
 }
 
 // ── 套圖渲染 ─────────────────────────────────────────────────────────────────
@@ -337,19 +504,31 @@ window.addEventListener('mousemove', e => {
     view.tx = drag.tx0 + (e.clientX - drag.sx);
     view.ty = drag.ty0 + (e.clientY - drag.sy);
     render();
-  } else if (activeTab === 'fit' && FIT.data) {
-    handleFitHover(e);
-  } else if (activeTab === 'adj' && MANUAL.active) {
+  } else {
+    // Status bar coords
     const rect = canvas.getBoundingClientRect();
-    const newHover = hitTestManual(e.clientX - rect.left, e.clientY - rect.top);
-    const prev = MANUAL.hover;
-    const changed = (!!newHover !== !!prev) ||
-      (newHover && prev && (newHover.type !== prev.type || newHover.label !== prev.label ||
-                            newHover.idx !== prev.idx || newHover.i !== prev.i));
-    if (changed) {
-      MANUAL.hover = newHover;
-      canvas.style.cursor = newHover ? 'crosshair' : 'grab';
-      render();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    if (mx >= 0 && my >= 0 && mx <= canvas.width && my <= canvas.height) {
+      const w = screenToWorld(mx, my);
+      const coordEl = document.getElementById('status-coords');
+      if (w && coordEl) {
+        coordEl.textContent = `N: ${w.y.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}  E: ${w.x.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+      }
+    }
+    if (activeTab === 'fit' && FIT.data) {
+      handleFitHover(e);
+    } else if (activeTab === 'adj' && MANUAL.active) {
+      const rect2 = canvas.getBoundingClientRect();
+      const newHover = hitTestManual(e.clientX - rect2.left, e.clientY - rect2.top);
+      const prev = MANUAL.hover;
+      const changed = (!!newHover !== !!prev) ||
+        (newHover && prev && (newHover.type !== prev.type || newHover.label !== prev.label ||
+                              newHover.idx !== prev.idx || newHover.i !== prev.i));
+      if (changed) {
+        MANUAL.hover = newHover;
+        canvas.style.cursor = newHover ? 'crosshair' : 'grab';
+        render();
+      }
     }
   }
 });
@@ -502,16 +681,45 @@ for (const { id, key } of _adjExtraLayers) {
 }
 
 // ── 分頁切換 ─────────────────────────────────────────────────────────────────
-document.querySelectorAll('.tab-btn').forEach(btn => {
+document.querySelectorAll('.tb-btn[data-tab]').forEach(btn => {
   btn.addEventListener('click', () => {
     activeTab = btn.dataset.tab;
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tb-btn[data-tab]').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById(`tab-${activeTab}`).classList.add('active');
+    // Update basemap CRS warning
+    updateBasemapCrsWarn();
     if (extents) { initView(); render(); } else render();
   });
 });
+
+// ── Panel collapse toggle ─────────────────────────────────────────────────────
+(function () {
+  const panel  = document.getElementById('side-panel');
+  const toggle = document.getElementById('panel-toggle');
+  if (!panel || !toggle) return;
+  toggle.addEventListener('click', () => {
+    const collapsed = panel.classList.toggle('collapsed');
+    toggle.textContent = collapsed ? '▶' : '◀';
+    setTimeout(() => resizeCanvas(), 220);
+  });
+})();
+
+// ── Toolbar action buttons ────────────────────────────────────────────────────
+document.getElementById('btn-download').onclick = () => {
+  if (!FIT.result) return;
+  exportCoordTXT(FIT.result.fitted_boundary, FIT.fileMap['D14']?.name?.replace(/\.[^.]+$/, '') || 'fit');
+};
+document.getElementById('btn-fit-gpkg').onclick = async () => {
+  if (!FIT.result) return;
+  showToast('產生 GeoPackage…');
+  await writeFitGPKG(FIT.result, FIT.data, FIT.fileMap['D14']?.name?.replace(/\.[^.]+$/, '') || 'fit');
+  showToast('GeoPackage 已下載');
+};
+document.getElementById('btn-changelog').onclick = () => {
+  openChangelog();
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  PYODIDE WORKER
@@ -540,12 +748,17 @@ worker.onmessage = (e) => {
     case 'adj_run_result':
       onAdjResult(payload);
       break;
+    case 'crs_result':
+      onCrsResult(payload);
+      break;
     case 'error':
       showToast('錯誤：' + payload, true);
       progressHide('fit-progress');
       progressHide('adj-progress');
+      progressHide('crs-progress');
       setBtn('btn-fit',        false, '▶ 執行套疊');
       setBtn('btn-adj-run',    false, '▶ 執行調整');
+      setBtn('btn-crs-convert', false, '🔄 一鍵轉 TWD97');
       break;
   }
 };
@@ -559,7 +772,6 @@ worker.postMessage({ type: 'init' });
 // ═══════════════════════════════════════════════════════════════════════════════
 //  資料夾遞迴讀取（FileSystemEntry API）
 // ═══════════════════════════════════════════════════════════════════════════════
-// entries 必須在 drop 事件同步階段就先擷取，await 之後 dataTransfer 就失效
 async function processEntries(entries, extensions) {
   const extSet  = new Set(extensions.map(e => e.toUpperCase()));
   const results = [];
@@ -603,7 +815,6 @@ dropZone.addEventListener('drop', async e => {
   e.stopPropagation();
   _fitDragDepth = 0;
   dropZone.classList.remove('over');
-  // 同步取出 entries 和 fallback files（await 後 dataTransfer 失效）
   const entries      = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
   const fallback     = [...e.dataTransfer.files];
   const files = entries.length ? await processEntries(entries, FIT_EXTS) : fallback;
@@ -653,6 +864,7 @@ function onFitParsed(data) {
   FIT.data    = data;
   FIT.result  = null;
   FIT.weights = {};
+  FIT.crsIsWGS97 = false;
 
   const allY = [], allX = [];
   for (const [y1, x1, y2, x2] of data.segments) { allY.push(y1, y2); allX.push(x1, x2); }
@@ -668,6 +880,8 @@ function onFitParsed(data) {
   updateFitStats(data.stats, null);
   document.getElementById('fit-section').style.display = '';
   setBtn('btn-fit', false, '▶ 執行套疊');
+  // Enable CRS convert button
+  document.getElementById('btn-crs-convert').disabled = false;
   showToast(`解析完成：${data.stats.n_segs} 條線段、${data.stats.n_ref} 個參考點`);
   render();
 }
@@ -686,9 +900,10 @@ function onFitResult(result) {
   FIT.result = result;
   updateFitStats(FIT.data.stats, result);
   updateFitParams(result);
-  document.getElementById('btn-fit-gpkg').style.display     = '';
   document.getElementById('btn-fit-send-adj').style.display = '';
-  document.getElementById('btn-download').style.display     = '';
+  // Show toolbar buttons
+  document.getElementById('btn-download').style.display = '';
+  document.getElementById('btn-fit-gpkg').style.display = '';
   showToast(`套疊完成  RMSE: ${result.stats.rmse_after.toFixed(4)} m`);
   render();
 }
@@ -714,26 +929,12 @@ function updateFitParams(result) {
   document.getElementById('params-section').style.display = '';
 }
 
-// 匯出 GeoPackage（套圖）
-document.getElementById('btn-fit-gpkg').onclick = async () => {
-  if (!FIT.result) return;
-  showToast('產生 GeoPackage…');
-  await writeFitGPKG(FIT.result, FIT.data, FIT.fileMap['D14']?.name?.replace(/\.[^.]+$/, '') || 'fit');
-  showToast('GeoPackage 已下載');
-};
-
 // 送入調整模組
 document.getElementById('btn-fit-send-adj').onclick = () => {
   if (!FIT.result) return;
   showToast('已切換至調整模組（尚需上傳 COA/BNP/PAR）');
   document.getElementById('adj-from-fit').style.display = '';
   document.querySelector('[data-tab="adj"]').click();
-};
-
-// 下載結果（TXT 座標）
-document.getElementById('btn-download').onclick = () => {
-  if (!FIT.result) return;
-  exportCoordTXT(FIT.result.fitted_boundary, FIT.fileMap['D14']?.name?.replace(/\.[^.]+$/, '') || 'fit');
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -929,6 +1130,159 @@ document.getElementById('btn-adj-gpkg').onclick = async () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  CRS MODULE (TWD67 → TWD97)
+// ═══════════════════════════════════════════════════════════════════════════════
+document.getElementById('btn-crs-convert').onclick = () => {
+  if (!FIT.data) return;
+  if (FIT.crsIsWGS97) { showToast('已是 TWD97 座標，無需重複轉換'); return; }
+
+  // Collect all unique points from ref_pts + boundary_pts
+  const ptMap = new Map();
+  for (const p of FIT.data.ref_pts) {
+    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
+    ptMap.set(key, [p.y, p.x]);
+  }
+  for (const p of FIT.data.boundary_pts) {
+    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
+    ptMap.set(key, [p.y, p.x]);
+  }
+  // Also include segment endpoints
+  for (const [y1, x1, y2, x2] of FIT.data.segments) {
+    ptMap.set(`${y1.toFixed(6)}:${x1.toFixed(6)}`, [y1, x1]);
+    ptMap.set(`${y2.toFixed(6)}:${x2.toFixed(6)}`, [y2, x2]);
+  }
+
+  const pts = [...ptMap.values()];
+
+  setBtn('btn-crs-convert', true, '轉換中…');
+  progressShow('crs-progress');
+  worker.postMessage({ type: 'crs_convert', payload: { pts } });
+};
+
+function onCrsResult(result) {
+  progressHide('crs-progress');
+  setBtn('btn-crs-convert', false, '🔄 一鍵轉 TWD97');
+
+  if (!FIT.data) return;
+
+  // Build lookup: original [N,E] → converted [N97,E97]
+  // We need to re-run conversion on each point individually using the same ordering
+  // Instead, rebuild a map from input key → output
+  // The worker returns pts in same order as payload.pts
+  // We must re-collect in the same order to map back
+
+  const ptMap = new Map();
+  const orderedKeys = [];
+  for (const p of FIT.data.ref_pts) {
+    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
+    if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
+  }
+  for (const p of FIT.data.boundary_pts) {
+    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
+    if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
+  }
+  for (const [y1, x1, y2, x2] of FIT.data.segments) {
+    for (const [y, x] of [[y1,x1],[y2,x2]]) {
+      const key = `${y.toFixed(6)}:${x.toFixed(6)}`;
+      if (!ptMap.has(key)) { ptMap.set(key, null); orderedKeys.push(key); }
+    }
+  }
+
+  // Map converted pts back
+  result.pts.forEach(([N97, E97], i) => {
+    ptMap.set(orderedKeys[i], [N97, E97]);
+  });
+
+  // Apply to ref_pts
+  for (const p of FIT.data.ref_pts) {
+    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
+    const conv = ptMap.get(key);
+    if (conv) { p.y = conv[0]; p.x = conv[1]; }
+  }
+  // Apply to boundary_pts
+  for (const p of FIT.data.boundary_pts) {
+    const key = `${p.y.toFixed(6)}:${p.x.toFixed(6)}`;
+    const conv = ptMap.get(key);
+    if (conv) { p.y = conv[0]; p.x = conv[1]; }
+  }
+  // Apply to segments
+  FIT.data.segments = FIT.data.segments.map(([y1, x1, y2, x2]) => {
+    const k1 = `${y1.toFixed(6)}:${x1.toFixed(6)}`;
+    const k2 = `${y2.toFixed(6)}:${x2.toFixed(6)}`;
+    const c1 = ptMap.get(k1) || [y1, x1];
+    const c2 = ptMap.get(k2) || [y2, x2];
+    return [c1[0], c1[1], c2[0], c2[1]];
+  });
+
+  // Recalculate extents
+  const allY = [], allX = [];
+  for (const [y1, x1, y2, x2] of FIT.data.segments) { allY.push(y1, y2); allX.push(x1, x2); }
+  for (const p of FIT.data.ref_pts)      { allY.push(p.y); allX.push(p.x); }
+  for (const p of FIT.data.boundary_pts) { allY.push(p.y); allX.push(p.x); }
+  const pad = (Math.max(...allY) - Math.min(...allY)) * 0.05;
+  extents = {
+    minY: Math.min(...allY) - pad, maxY: Math.max(...allY) + pad,
+    minX: Math.min(...allX) - pad, maxX: Math.max(...allX) + pad,
+  };
+
+  FIT.crsIsWGS97 = true;
+  FIT.result = null; // Clear fit result since coords changed
+
+  // Show result section
+  const resEl = document.getElementById('crs-result-section');
+  document.getElementById('crs-dn').textContent    = (result.mean_dn >= 0 ? '+' : '') + result.mean_dn.toFixed(3) + ' m';
+  document.getElementById('crs-de').textContent    = (result.mean_de >= 0 ? '+' : '') + result.mean_de.toFixed(3) + ' m';
+  document.getElementById('crs-count').textContent = result.pts.length + ' 點';
+  resEl.style.display = '';
+
+  // Update from-badge
+  const badge = document.getElementById('crs-from-badge');
+  if (badge) { badge.textContent = 'TWD97'; badge.className = 'crs-badge twd97'; }
+
+  updateBasemapCrsWarn();
+  resizeCanvas(); initView(); render();
+  showToast('TWD67→TWD97 轉換完成');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BASEMAP MODULE
+// ═══════════════════════════════════════════════════════════════════════════════
+function updateBasemapCrsWarn() {
+  const warn = document.getElementById('basemap-crs-warn');
+  if (!warn) return;
+  warn.style.display = (FIT.data && !FIT.crsIsWGS97) ? '' : 'none';
+}
+
+(function () {
+  const visEl    = document.getElementById('basemap-visible');
+  const opacEl   = document.getElementById('basemap-opacity');
+  const opacVal  = document.getElementById('basemap-opacity-val');
+
+  if (visEl) visEl.onchange = () => {
+    BASEMAP.visible = visEl.checked;
+    render();
+  };
+  if (opacEl) opacEl.oninput = () => {
+    BASEMAP.opacity = parseInt(opacEl.value, 10);
+    if (opacVal) opacVal.textContent = BASEMAP.opacity + '%';
+    render();
+  };
+
+  document.querySelectorAll('input[name="basemap-src"]').forEach(radio => {
+    radio.onchange = () => {
+      if (radio.checked) {
+        BASEMAP.provider = radio.value;
+        // Clear tile cache for old provider
+        for (const key of [..._tileCache.keys()]) {
+          if (!key.endsWith('/' + BASEMAP.provider)) _tileCache.delete(key);
+        }
+        render();
+      }
+    };
+  });
+})();
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  EXPORT HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 function exportCoordTXT(points, filename) {
@@ -939,7 +1293,6 @@ function exportCoordTXT(points, filename) {
   a.href = URL.createObjectURL(blob); a.download = `${filename}_coords.txt`; a.click();
 }
 
-// ── GeoPackage writers (simple, uses sql.js via gpkg_writer.js) ──────────────
 async function writeFitGPKG(fitResult, fitData, caseNo) {
   if (typeof writeGPKG !== 'function') { showToast('GeoPackage 模組未載入', true); return; }
   const points = (fitResult.fitted_boundary || []).map((p, i) => ({
@@ -1001,6 +1354,28 @@ function showToast(msg, isError = false) {
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
 }
+
+// ── Changelog ─────────────────────────────────────────────────────────────────
+function openChangelog() {
+  const modal = el('changelog-modal');
+  const body  = el('changelog-body');
+  if (!modal || !body) return;
+  const entries = (window.CHANGELOG || []);
+  body.innerHTML = entries.length ? entries.map(e => `
+    <div class="cl-entry">
+      <div class="cl-head">
+        <span class="cl-tag">${e.version}</span>
+        <span class="cl-date">${e.date || ''}</span>
+      </div>
+      <ul class="cl-notes">${(e.notes || []).map(n => `<li>${n}</li>`).join('')}</ul>
+    </div>`).join('')
+    : '<div style="color:var(--muted)">（無日誌資料）</div>';
+  modal.style.display = 'flex';
+}
+document.getElementById('changelog-close').onclick = () => {
+  const modal = el('changelog-modal');
+  if (modal) modal.style.display = 'none';
+};
 
 // ── 全域攔截：防止瀏覽器對拖放執行預設「開啟/瀏覽」行為 ─────────────────────
 document.addEventListener('dragover', e => e.preventDefault());
@@ -1090,8 +1465,6 @@ function hitTestManual(mx, my) {
 
   // 3. 整筆宗地（面）
   for (const [label, coords] of Object.entries(MANUAL.coords)) {
-    // 先轉 world 座標做 PIP
-    // 換算 canvas → world
     if (!extents) continue;
     const wy = extents.maxY - (my - view.ty) / view.scale;
     const wx = (mx - view.tx) / view.scale + extents.minX;
@@ -1103,34 +1476,29 @@ function hitTestManual(mx, my) {
   return null;
 }
 
-// ── 初始化 MANUAL.coords（複製 coords_after，並將調整後的共用點傳播至鄰地） ──
+// ── 初始化 MANUAL.coords ────────────────────────────────────────────────────
 function initManualCoords() {
   MANUAL.coords = {};
   MANUAL.areas  = {};
   if (!ADJ.result) return;
 
-  // Step 1：所有宗地先用原始座標初始化
   if (ADJ.data) {
     for (const p of ADJ.data.parcels) {
       if (p.coords) MANUAL.coords[p.label] = p.coords.map(c => [c[0], c[1]]);
     }
   }
 
-  // Step 2：被調整的宗地覆蓋為 coords_after
   for (const p of ADJ.result.adjusted_parcels) {
     MANUAL.coords[p.label] = p.coords_after.map(c => [c[0], c[1]]);
   }
 
-  // Step 3：將調整後移動的點傳播到「未被調整的鄰地」
-  // （Python 只更新被調整宗地的座標，鄰地共用點仍停在原位，導致 epsilon 匹配失效）
   const adjKeys = new Set(ADJ.result.adjusted_parcels.map(p => p.label));
   for (const ap of ADJ.result.adjusted_parcels) {
     const n = Math.min(ap.coords_before.length, ap.coords_after.length);
     for (let i = 0; i < n; i++) {
       const [by, bx] = ap.coords_before[i];
       const [ay, ax] = ap.coords_after[i];
-      if (Math.abs(ay - by) < 1e-9 && Math.abs(ax - bx) < 1e-9) continue; // 點未移動
-      // 在所有「未調整」的鄰地中尋找原始位置相符的點，更新為調整後位置
+      if (Math.abs(ay - by) < 1e-9 && Math.abs(ax - bx) < 1e-9) continue;
       for (const [label, coords] of Object.entries(MANUAL.coords)) {
         if (adjKeys.has(label)) continue;
         for (let k = 0; k < coords.length; k++) {
@@ -1145,10 +1513,8 @@ function initManualCoords() {
   updateManualAreas();
 }
 
-// ── 重算各宗地面積 ────────────────────────────────────────────────────────────
 function updateManualAreas() {
   if (!ADJ.data) return;
-  // 建立登記面積 / 公差的 lookup
   const regMap = {}, tolMap = {};
   for (const p of ADJ.data.parcels) {
     regMap[p.label] = p.reg;
@@ -1163,7 +1529,6 @@ function updateManualAreas() {
   }
 }
 
-// ── 進入 / 離開手動模式 ──────────────────────────────────────────────────────
 function enterManualMode() {
   initManualCoords();
   MANUAL.active     = true;
@@ -1183,7 +1548,6 @@ function enterManualMode() {
 
 function exitManualMode(apply) {
   if (apply && ADJ.result) {
-    // 將 MANUAL.coords 寫回 ADJ.result.adjusted_parcels
     for (const ap of ADJ.result.adjusted_parcels) {
       if (MANUAL.coords[ap.label]) {
         ap.coords_after = MANUAL.coords[ap.label].map(c => [c[0], c[1]]);
@@ -1210,7 +1574,6 @@ function exitManualMode(apply) {
   render();
 }
 
-// ── 點擊選取（Ctrl+click 複選同類） ─────────────────────────────────────────
 function handleAdjManualClick(e) {
   const rect = canvas.getBoundingClientRect();
   const hit  = hitTestManual(e.clientX - rect.left, e.clientY - rect.top);
@@ -1218,7 +1581,6 @@ function handleAdjManualClick(e) {
   const ctrl = e.ctrlKey || e.metaKey;
 
   if (!hit) {
-    // 點空白處 → 清除所有選取
     MANUAL.selections = [];
     info.textContent  = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
     render();
@@ -1228,12 +1590,10 @@ function handleAdjManualClick(e) {
   if (ctrl && MANUAL.selections.length > 0) {
     const existType = MANUAL.selections[0].type;
     if (hit.type !== existType) {
-      // 類型不符 → 不加入，提示
       info.textContent = `⚠ 複選限同類（目前：${existType}）`;
       render();
       return;
     }
-    // 判斷是否已選（若已選則取消）
     const key = selKey(hit);
     const idx = MANUAL.selections.findIndex(s => selKey(s) === key);
     if (idx >= 0) {
@@ -1242,11 +1602,9 @@ function handleAdjManualClick(e) {
       MANUAL.selections.push(hit);
     }
   } else {
-    // 一般點擊 → 重設為單選
     MANUAL.selections = [hit];
   }
 
-  // 更新 info 文字
   const cnt = MANUAL.selections.length;
   if (cnt === 0) {
     info.textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
@@ -1268,7 +1626,6 @@ function selKey(s) {
   return `parcel:${s.label}`;
 }
 
-// ── 撤銷 (Undo) 相關 ─────────────────────────────────────────────────────────
 function snapshotCoords() {
   const snap = {};
   for (const [k, v] of Object.entries(MANUAL.coords)) snap[k] = v.map(c => [c[0], c[1]]);
@@ -1289,7 +1646,6 @@ function undoManual() {
   showToast(`已回到上一步（還可再退 ${MANUAL.history.length} 步）`);
 }
 
-/** 回復到自動調整前的原始座標（ADJ.data.parcels.coords，未經 Python 調整） */
 function resetToOriginalCoords() {
   if (!ADJ.data) return;
   MANUAL.coords = {};
@@ -1304,10 +1660,8 @@ function resetToOriginalCoords() {
   document.getElementById('manual-sel-info').textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
 }
 
-// ── 移動選取（用箭頭鍵，支援多選） ──────────────────────────────────────────
-const EPS_SHARE = 0.001; // 共用界址點判斷距離（公尺）
+const EPS_SHARE = 0.001;
 
-/** 在所有宗地中找到 epsilon 吻合的點並移動（傳播鄰地連動） */
 function movePtInAll(origY, origX, dy, dx) {
   for (const coords of Object.values(MANUAL.coords)) {
     for (let k = 0; k < coords.length; k++) {
@@ -1321,11 +1675,9 @@ function movePtInAll(origY, origX, dy, dx) {
 function moveManualSelection(dy, dx) {
   if (!MANUAL.selections.length) return;
 
-  pushHistory(); // 移動前先存快照，供 Ctrl+Z 回退
+  pushHistory();
 
-  // 收集所有「待移動點」的原始位置（去重，避免同一點被多個選取項帶到後重複移動）
-  // 用 "y:x" 字串做 key 去重
-  const toMoveMap = new Map(); // key → [origY, origX]
+  const toMoveMap = new Map();
 
   for (const sel of MANUAL.selections) {
     if (sel.type === 'point') {
@@ -1354,12 +1706,10 @@ function moveManualSelection(dy, dx) {
     }
   }
 
-  // 移動所有去重後的點（每個點只呼叫一次，movePtInAll 會傳播到所有鄰地）
   for (const [origY, origX] of toMoveMap.values()) {
     movePtInAll(origY, origX, dy, dx);
   }
 
-  // 更新 point 選取的追蹤座標
   MANUAL.selections = MANUAL.selections.map(sel => {
     if (sel.type === 'point') return { ...sel, y: sel.y + dy, x: sel.x + dx };
     return sel;
@@ -1373,14 +1723,12 @@ function moveManualSelection(dy, dx) {
 function renderAdjManual(W, H) {
   if (!MANUAL.active || !ADJ.data) return;
 
-  // 背景：所有未調整宗地（淡灰）
   for (const [label, coords] of Object.entries(MANUAL.coords)) {
     const ma = MANUAL.areas[label];
     const col = ma ? (ma.ok ? 'rgba(62,207,110,.35)' : 'rgba(240,82,82,.35)') : 'rgba(100,100,120,.3)';
     drawPolygon(coords, col, 1);
   }
 
-  // 面積 / 較差資訊標籤
   ctx.textAlign = 'center';
   for (const [label, coords] of Object.entries(MANUAL.coords)) {
     const ma = MANUAL.areas[label];
@@ -1390,13 +1738,11 @@ function renderAdjManual(W, H) {
     const [sx, sy] = worldToScreen(cy_, cx_);
     const col  = ma.ok ? '#3ecf6e' : '#f05252';
 
-    // 地號
     ctx.font = `${Math.max(9, Math.min(11, view.scale * 0.8))}px Consolas`;
     const tw0 = ctx.measureText(label).width;
     ctx.fillStyle = 'rgba(10,12,18,.7)'; ctx.fillRect(sx - tw0 / 2 - 3, sy - 11, tw0 + 6, 14);
     ctx.fillStyle = col; ctx.fillText(label, sx, sy);
 
-    // 較差
     const diffTxt = `差${ma.diff.toFixed(2)}`;
     ctx.font = `${Math.max(8, Math.min(10, view.scale * 0.7))}px Consolas`;
     const tw1 = ctx.measureText(diffTxt).width;
@@ -1404,7 +1750,6 @@ function renderAdjManual(W, H) {
     ctx.fillStyle = col; ctx.fillText(diffTxt, sx, sy + 15);
   }
 
-  // ── 高亮輔助函式 ──────────────────────────────────────────────────────────
   function highlightEdge(label, i, j, strokeCol, lineW) {
     const coords = MANUAL.coords[label];
     if (!coords) return;
@@ -1424,18 +1769,15 @@ function renderAdjManual(W, H) {
     ctx.fill(); ctx.stroke();
   }
 
-  // ── Hover 高亮（紫色淡） ──────────────────────────────────────────────────
   const hover = MANUAL.hover;
   if (hover) {
     if (hover.type === 'point') highlightPt(hover.label, hover.idx, 'rgba(167,139,250,.8)', 6);
     else if (hover.type === 'edge') highlightEdge(hover.label, hover.i, hover.j, 'rgba(167,139,250,.7)', 2);
   }
 
-  // ── 選取高亮（所有 selections，紫色亮） ──────────────────────────────────
   for (const sel of MANUAL.selections) {
     if (sel.type === 'point') {
       highlightPt(sel.label, sel.idx, '#a78bfa', 7);
-      // 僅單選時顯示座標文字
       if (MANUAL.selections.length === 1) {
         const coords = MANUAL.coords[sel.label];
         if (coords && sel.idx < coords.length) {
@@ -1457,7 +1799,6 @@ function renderAdjManual(W, H) {
     }
   }
 
-  // 所有界址點（小圓點）
   ctx.fillStyle = 'rgba(200,200,255,.6)';
   for (const coords of Object.values(MANUAL.coords)) {
     for (const [wy, wx] of coords) {
@@ -1467,7 +1808,6 @@ function renderAdjManual(W, H) {
   }
 }
 
-// ── 手動工具列事件（null-safe：舊版快取 HTML 缺少元素時不會 crash） ──────────
 function _on(id, fn) { const b = document.getElementById(id); if (b) b.onclick = fn; }
 
 _on('btn-manual-adj',     () => { if (ADJ.result) enterManualMode(); });
@@ -1490,13 +1830,11 @@ _on('btn-manual-exit',    () => exitManualMode(false));
   if (sel) sel.onchange = () => { MANUAL.step = parseFloat(sel.value); };
 })();
 
-// ── 鍵盤（方向鍵 / ESC） ─────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
   if (!MANUAL.active) return;
 
   if (e.key === 'Escape') { exitManualMode(false); return; }
 
-  // Ctrl+Z → 撤銷上一動
   if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
     e.preventDefault();
     undoManual();
@@ -1523,7 +1861,7 @@ function generateParcelPDF(p) {
     showToast('jsPDF 尚未載入，請稍後再試', true);
     return;
   }
-  const A4W = 794, A4H = 1123;   // 96 dpi A4
+  const A4W = 794, A4H = 1123;
   const offscreen = document.createElement('canvas');
   offscreen.width  = A4W;
   offscreen.height = A4H;
@@ -1542,14 +1880,12 @@ function generateParcelPDF(p) {
 }
 
 function drawPDFPage(oc, W, H, p) {
-  // 背景
   oc.fillStyle = '#ffffff';
   oc.fillRect(0, 0, W, H);
 
   const MARGIN = 40;
   let y = MARGIN;
 
-  // ── 標題 ──
   oc.fillStyle = '#1a1d27';
   oc.fillRect(0, 0, W, 70);
   oc.fillStyle = '#ffffff';
@@ -1561,7 +1897,6 @@ function drawPDFPage(oc, W, H, p) {
   oc.fillText(`地號：${p.label}`, MARGIN + 200, 44);
   y = 90;
 
-  // ── 統計表格 ──
   const rows = [
     ['登記面積', `${p.reg.toFixed(4)} m²`],
     ['調整前面積', `${p.area_before.toFixed(4)} m²`],
@@ -1592,19 +1927,16 @@ function drawPDFPage(oc, W, H, p) {
   }
   y += rows.length * ROW_H + 20;
 
-  // ── 分隔線 ──
   oc.strokeStyle = '#e5e7eb'; oc.lineWidth = 1;
   oc.beginPath(); oc.moveTo(MARGIN, y); oc.lineTo(W - MARGIN, y); oc.stroke();
   y += 16;
 
-  // ── 示意圖標題 ──
   oc.fillStyle = '#374151';
   oc.font = 'bold 13px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
   oc.textAlign = 'left';
   oc.fillText('調整示意圖', MARGIN, y + 14);
   y += 30;
 
-  // ── 示意圖區域 ──
   const diagH = Math.min(H - y - 80, 480);
   const diagW = W - MARGIN * 2;
   oc.strokeStyle = '#e5e7eb'; oc.lineWidth = 1;
@@ -1612,7 +1944,6 @@ function drawPDFPage(oc, W, H, p) {
   drawParcelDiagramInPDF(oc, MARGIN + 10, y + 10, diagW - 20, diagH - 20, p);
   y += diagH + 16;
 
-  // ── 圖例 ──
   const legendItems = [
     { col: '#f05252', dash: true,  label: '調整前輪廓' },
     { col: '#3ecf6e', dash: false, label: '調整後輪廓' },
@@ -1631,13 +1962,12 @@ function drawPDFPage(oc, W, H, p) {
   }
   y += 30;
 
-  // ── 頁尾 ──
   oc.fillStyle = '#9ca3af';
   oc.font = '10px "Consolas", monospace';
   oc.textAlign = 'center';
   const now = new Date();
   const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-  oc.fillText(`CadastralWorkbench v${window.CW_VERSION || '0.7'}  ·  ${dateStr}`, W / 2, H - 20);
+  oc.fillText(`CadastralWorkbench v${window.CW_VERSION || '0.9'}  ·  ${dateStr}`, W / 2, H - 20);
 }
 
 function drawParcelDiagramInPDF(oc, ox, oy, W, H, p) {
@@ -1645,7 +1975,6 @@ function drawParcelDiagramInPDF(oc, ox, oy, W, H, p) {
   const after  = p.coords_after;
   if (!before || !after || !before.length || !after.length) return;
 
-  // 計算 bounding box（涵蓋 before + after）
   const allY = [...before.map(c => c[0]), ...after.map(c => c[0])];
   const allX = [...before.map(c => c[1]), ...after.map(c => c[1])];
   const minY = Math.min(...allY), maxY = Math.max(...allY);
@@ -1660,72 +1989,66 @@ function drawParcelDiagramInPDF(oc, ox, oy, W, H, p) {
     return [offX + (wx - minX) * sc, offY + (maxY - wy) * sc];
   }
 
-  // 調整前（紅虛線）
   oc.strokeStyle = '#f05252'; oc.lineWidth = 1.5; oc.setLineDash([8, 5]);
   oc.beginPath();
   before.forEach((c, i) => {
-    const [cx, cy] = toCanvas(c[0], c[1]);
-    if (i === 0) oc.moveTo(cx, cy); else oc.lineTo(cx, cy);
+    const [cx_, cy_] = toCanvas(c[0], c[1]);
+    if (i === 0) oc.moveTo(cx_, cy_); else oc.lineTo(cx_, cy_);
   });
   oc.closePath(); oc.stroke(); oc.setLineDash([]);
 
-  // 調整後（綠實線）
   oc.strokeStyle = '#3ecf6e'; oc.lineWidth = 2; oc.setLineDash([]);
   oc.fillStyle = 'rgba(62,207,110,0.08)';
   oc.beginPath();
   after.forEach((c, i) => {
-    const [cx, cy] = toCanvas(c[0], c[1]);
-    if (i === 0) oc.moveTo(cx, cy); else oc.lineTo(cx, cy);
+    const [cx_, cy_] = toCanvas(c[0], c[1]);
+    if (i === 0) oc.moveTo(cx_, cy_); else oc.lineTo(cx_, cy_);
   });
   oc.closePath(); oc.fill(); oc.stroke();
 
-  // 位移向量箭頭 + 找最大位移點
   let maxShift = 0, maxPt = null;
   const n = Math.min(before.length, after.length);
   for (let i = 0; i < n; i++) {
-    const [bx, by] = toCanvas(before[i][0], before[i][1]);
-    const [ax, ay] = toCanvas(after[i][0],  after[i][1]);
-    const dist = Math.hypot(ax - bx, ay - by);
-    if (dist > 0.5) {  // 省略微小位移
+    const [bx_, by_] = toCanvas(before[i][0], before[i][1]);
+    const [ax_, ay_] = toCanvas(after[i][0],  after[i][1]);
+    const dist = Math.hypot(ax_ - bx_, ay_ - by_);
+    if (dist > 0.5) {
       oc.strokeStyle = 'rgba(167,139,250,0.7)'; oc.lineWidth = 1;
-      oc.beginPath(); oc.moveTo(bx, by); oc.lineTo(ax, ay); oc.stroke();
-      // 箭頭頭
-      const angle = Math.atan2(ay - by, ax - bx);
+      oc.beginPath(); oc.moveTo(bx_, by_); oc.lineTo(ax_, ay_); oc.stroke();
+      const angle = Math.atan2(ay_ - by_, ax_ - bx_);
       const AL = 6;
       oc.beginPath();
-      oc.moveTo(ax, ay);
-      oc.lineTo(ax - AL * Math.cos(angle - 0.4), ay - AL * Math.sin(angle - 0.4));
-      oc.lineTo(ax - AL * Math.cos(angle + 0.4), ay - AL * Math.sin(angle + 0.4));
+      oc.moveTo(ax_, ay_);
+      oc.lineTo(ax_ - AL * Math.cos(angle - 0.4), ay_ - AL * Math.sin(angle - 0.4));
+      oc.lineTo(ax_ - AL * Math.cos(angle + 0.4), ay_ - AL * Math.sin(angle + 0.4));
       oc.closePath(); oc.fillStyle = 'rgba(167,139,250,0.9)'; oc.fill();
     }
     const worldDist = Math.hypot(after[i][0] - before[i][0], after[i][1] - before[i][1]);
     if (worldDist > maxShift) { maxShift = worldDist; maxPt = i; }
   }
 
-  // 最大位移點標示
   if (maxPt !== null) {
-    const [ax, ay] = toCanvas(after[maxPt][0], after[maxPt][1]);
+    const [ax_, ay_] = toCanvas(after[maxPt][0], after[maxPt][1]);
     oc.fillStyle = '#f5c542';
-    oc.beginPath(); oc.arc(ax, ay, 6, 0, Math.PI * 2); oc.fill();
+    oc.beginPath(); oc.arc(ax_, ay_, 6, 0, Math.PI * 2); oc.fill();
     oc.strokeStyle = '#fff'; oc.lineWidth = 1.5;
-    oc.beginPath(); oc.arc(ax, ay, 6, 0, Math.PI * 2); oc.stroke();
+    oc.beginPath(); oc.arc(ax_, ay_, 6, 0, Math.PI * 2); oc.stroke();
     oc.fillStyle = '#92400e';
     oc.font = 'bold 10px "Consolas", monospace';
     oc.textAlign = 'left';
-    oc.fillText(`max: ${p.max_shift_cm.toFixed(2)} cm`, ax + 10, ay + 4);
+    oc.fillText(`max: ${p.max_shift_cm.toFixed(2)} cm`, ax_ + 10, ay_ + 4);
   }
 
-  // 比例尺（右下角）
-  const scaleM  = 1;   // 1 公尺
+  const scaleM  = 1;
   const scalePx = sc;
   if (scalePx > 10 && scalePx < 300) {
-    const bx = ox + W - 10, by_ = oy + H - 10;
+    const bx_ = ox + W - 10, by__ = oy + H - 10;
     oc.strokeStyle = '#6b7280'; oc.lineWidth = 1; oc.setLineDash([]);
-    oc.beginPath(); oc.moveTo(bx - scalePx, by_); oc.lineTo(bx, by_); oc.stroke();
-    oc.beginPath(); oc.moveTo(bx - scalePx, by_ - 4); oc.lineTo(bx - scalePx, by_); oc.stroke();
-    oc.beginPath(); oc.moveTo(bx, by_ - 4); oc.lineTo(bx, by_); oc.stroke();
+    oc.beginPath(); oc.moveTo(bx_ - scalePx, by__); oc.lineTo(bx_, by__); oc.stroke();
+    oc.beginPath(); oc.moveTo(bx_ - scalePx, by__ - 4); oc.lineTo(bx_ - scalePx, by__); oc.stroke();
+    oc.beginPath(); oc.moveTo(bx_, by__ - 4); oc.lineTo(bx_, by__); oc.stroke();
     oc.fillStyle = '#6b7280'; oc.font = '9px Consolas'; oc.textAlign = 'center';
-    oc.fillText(`${scaleM} m`, bx - scalePx / 2, by_ - 6);
+    oc.fillText(`${scaleM} m`, bx_ - scalePx / 2, by__ - 6);
   }
 }
 
@@ -1734,3 +2057,4 @@ resizeCanvas();
 render();
 updateFitFileBadges();
 updateAdjFileBadges();
+updateStatusBar();

@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CadastralWorkbench</title>
-<link rel="stylesheet" href="css/style.css?v=0.81">
-<script src="js/version.js?v=0.8"></script>
+<link rel="stylesheet" href="css/style.css?v=0.9">
+<script src="js/version.js?v=0.9"></script>
 <script>
 /* 頁面最早期就攔截，防止瀏覽器把拖放的資料夾當成導航目標 */
 ['dragover','dragenter','drop'].forEach(function(evt) {
@@ -15,196 +15,270 @@
 </head>
 <body>
 
-<!-- ── Header ───────────────────────────────────────────────────────────── -->
-<header>
-  <span style="font-size:1.3rem">⚡</span>
-  <h1>CadastralWorkbench</h1>
-  <span class="badge" id="app-version">v0.8</span>
+<!-- ── Title Bar ────────────────────────────────────────────────────────────── -->
+<div class="title-bar">
+  <span style="font-size:1.1rem;line-height:1">⚡</span>
+  <span class="title-brand">CadastralWorkbench</span>
+  <span class="badge" id="app-version">v0.9</span>
   <div class="spacer"></div>
-  <button id="btn-download">⬇ 下載結果</button>
-</header>
+  <div id="pyodide-status">
+    <div class="dot-status"></div>
+    <span id="pyodide-label">Pyodide 載入中…</span>
+  </div>
+</div>
 
-<!-- ── Main Layout ──────────────────────────────────────────────────────── -->
-<div class="layout">
+<!-- ── Toolbar ───────────────────────────────────────────────────────────────── -->
+<div class="toolbar">
+  <!-- Module tabs (left) -->
+  <button class="tb-btn active" data-tab="fit">📐 套圖</button>
+  <button class="tb-btn"        data-tab="adj">📏 調整</button>
+  <button class="tb-btn"        data-tab="crs">🔄 TWD97</button>
+  <button class="tb-btn"        data-tab="basemap">🗺 底圖</button>
 
-  <!-- ── 側欄 ───────────────────────────────────────────────────────────── -->
-  <div class="sidebar">
+  <div class="tb-sep"></div>
 
-    <!-- 模組分頁 -->
-    <div class="tabs">
-      <button class="tab-btn active" data-tab="fit">📐 套圖</button>
-      <button class="tab-btn"        data-tab="adj">📏 調整</button>
-    </div>
+  <!-- Action buttons (right) -->
+  <button id="btn-download" class="tb-action-btn" style="display:none">⬇ 下載</button>
+  <button id="btn-fit-gpkg" class="tb-action-btn tb-action-green" style="display:none">📦 GPKG</button>
+  <button class="tb-action-btn" id="btn-changelog">📋 日誌</button>
+</div>
 
-    <!-- ══════════════════ 套圖分頁 ══════════════════ -->
-    <div id="tab-fit" class="tab-panel active">
+<!-- ── Workspace ─────────────────────────────────────────────────────────────── -->
+<div class="workspace">
 
-      <!-- 上傳 -->
-      <div class="section">
-        <h3>上傳 KC 地籍資料</h3>
-        <label id="drop-zone" for="file-input">
-          <div class="icon">📂</div>
-          拖放檔案或整個資料夾，或點擊選取<br>
-          <span style="font-size:.85rem;color:var(--muted)">D14 · D2C · D2D · D2B</span>
-        </label>
-        <input id="file-input" type="file" multiple style="position:fixed;top:-200px;left:-200px;opacity:0;width:1px;height:1px">
-        <div id="file-list" style="margin-top:8px"></div>
-        <div class="progress-wrap" id="fit-progress"><div class="progress-bar"></div></div>
-        <button id="btn-upload" class="btn btn-primary" style="margin-top:8px" disabled>解析並顯示</button>
-      </div>
+  <!-- ── Side Panel ─────────────────────────────────────────────────────────── -->
+  <div class="side-panel" id="side-panel">
+    <div class="panel-scroller">
 
-      <!-- 套疊控制 -->
-      <div id="fit-section" class="section" style="display:none">
-        <h3>套疊控制</h3>
-        <div style="font-size:.85rem;color:var(--muted);margin-bottom:8px">
-          點擊地圖上的參考點可調整個別權重
+      <!-- ══════════════════ 套圖分頁 ══════════════════ -->
+      <div id="tab-fit" class="tab-panel active">
+
+        <!-- 上傳 -->
+        <div class="section">
+          <h3>上傳 KC 地籍資料</h3>
+          <label id="drop-zone" for="file-input">
+            <div class="icon">📂</div>
+            拖放檔案或整個資料夾，或點擊選取<br>
+            <span style="font-size:.85rem;color:var(--muted)">D14 · D2C · D2D · D2B</span>
+          </label>
+          <input id="file-input" type="file" multiple style="position:fixed;top:-200px;left:-200px;opacity:0;width:1px;height:1px">
+          <div id="file-list" style="margin-top:8px"></div>
+          <div class="progress-wrap" id="fit-progress"><div class="progress-bar"></div></div>
+          <button id="btn-upload" class="btn btn-primary" style="margin-top:8px" disabled>解析並顯示</button>
         </div>
-        <button id="btn-fit" class="btn btn-primary" disabled>▶ 執行套疊</button>
-        <button id="btn-fit-gpkg" class="btn btn-green" style="display:none">📦 匯出 GeoPackage</button>
-        <button id="btn-fit-send-adj" class="btn btn-secondary" style="display:none">→ 送入調整模組</button>
-      </div>
 
-      <!-- 統計 -->
-      <div class="section">
-        <h3>資料統計</h3>
-        <div class="stat-grid">
-          <div class="stat-box"><div class="label">界址線段</div><div class="value" id="stat-segs">—</div></div>
-          <div class="stat-box"><div class="label">參考點</div><div class="value" id="stat-ref">—</div></div>
-          <div class="stat-box"><div class="label">RMSE</div><div class="value" id="stat-rmse">—</div></div>
-          <div class="stat-box"><div class="label">最大垂距</div><div class="value" id="stat-max">—</div></div>
-          <div class="stat-box" style="grid-column:span 2"><div class="label">參與套疊 / 總參考點</div><div class="value" id="stat-used">—</div></div>
-        </div>
-      </div>
-
-      <!-- 套疊結果參數 -->
-      <div id="params-section" class="section" style="display:none">
-        <h3>套疊結果</h3>
-        <div class="param-row"><span>旋轉角 θ</span><span class="val" id="param-theta">—</span></div>
-        <div class="param-row"><span>N 平移 ty</span><span class="val" id="param-ty">—</span></div>
-        <div class="param-row"><span>E 平移 tx</span><span class="val" id="param-tx">—</span></div>
-      </div>
-
-      <!-- 選中點 -->
-      <div id="point-panel" class="section">
-        <h3>選中點設定</h3>
-        <div class="point-info">（尚未選取）</div>
-        <div class="weight-buttons">
-          <button class="weight-btn">排除</button>
-          <button class="weight-btn">×0.25</button>
-          <button class="weight-btn">×0.5</button>
-          <button class="weight-btn active">×1</button>
-          <button class="weight-btn">×2</button>
-          <button class="weight-btn">×4</button>
-        </div>
-      </div>
-
-      <!-- 圖層 -->
-      <div class="section">
-        <h3>圖層顯示</h3>
-        <div class="toggle-row"><span>原始界址線</span><label class="toggle"><input id="layer-original" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>套疊後界址線</span><label class="toggle"><input id="layer-fitted" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>垂距殘差線</span><label class="toggle"><input id="layer-residuals" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>套疊標籤</span><label class="toggle"><input id="layer-labels" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>界址點</span><label class="toggle"><input id="layer-boundary" type="checkbox" checked><span class="slider"></span></label></div>
-      </div>
-
-      <!-- 圖例 -->
-      <div class="section">
-        <h3>圖例</h3>
-        <div class="legend-item"><div class="legend-line" style="background:rgba(70,120,200,.7)"></div><span>原始界址線</span></div>
-        <div class="legend-item"><div class="legend-line" style="background:#3ecf6e"></div><span>套疊後界址線</span></div>
-        <div class="legend-item"><div class="legend-circle" style="background:#3ecf6e"></div><span>殘差 &lt;0.1 m（良好）</span></div>
-        <div class="legend-item"><div class="legend-circle" style="background:#f5c542"></div><span>殘差 0.1–0.5 m（注意）</span></div>
-        <div class="legend-item"><div class="legend-circle" style="background:#f05252"></div><span>殘差 &gt;0.5 m（異常）</span></div>
-        <div class="legend-item"><div class="legend-circle" style="background:rgba(200,200,255,.6)"></div><span>界址點</span></div>
-        <div class="legend-item"><div class="legend-circle" style="background:rgba(245,197,66,.7)"></div><span>旋轉中心（重心）</span></div>
-      </div>
-
-    </div><!-- /tab-fit -->
-
-    <!-- ══════════════════ 調整分頁 ══════════════════ -->
-    <div id="tab-adj" class="tab-panel">
-
-      <!-- 上傳 -->
-      <div class="section">
-        <h3>上傳地籍調整資料</h3>
-        <label id="adj-drop-zone" for="adj-file-input">
-          <div class="icon">📂</div>
-          拖放檔案或整個資料夾，或點擊選取<br>
-          <span style="font-size:.85rem;color:var(--muted)">COA · BNP · PAR</span>
-        </label>
-        <input id="adj-file-input" type="file" multiple style="position:fixed;top:-200px;left:-200px;opacity:0;width:1px;height:1px">
-        <div id="adj-file-list" style="margin-top:8px"></div>
-        <div style="font-size:.85rem;color:var(--muted);margin-top:4px">或從套圖模組帶入</div>
-        <div id="adj-from-fit" style="display:none;font-size:.85rem;color:var(--purple);margin-top:4px">✓ 已從套圖模組帶入資料</div>
-        <div class="progress-wrap" id="adj-progress"><div class="progress-bar"></div></div>
-        <button id="btn-adj-upload" class="btn btn-primary" style="margin-top:8px" disabled>解析並顯示宗地</button>
-      </div>
-
-      <!-- 調整控制 -->
-      <div id="adj-section" class="section" style="display:none">
-        <h3>調整控制</h3>
-        <div style="font-size:.85rem;color:var(--muted);margin-bottom:6px">
-          紅色＝超差宗地；勾選後執行調整
-        </div>
-        <div class="adj-toolbar">
-          <button class="btn-tiny" id="btn-adj-chk-all">全選</button>
-          <button class="btn-tiny" id="btn-adj-chk-none">全不選</button>
-        </div>
-        <div id="adj-parcel-list" style="max-height:150px;overflow-y:auto;margin-bottom:8px;padding-right:6px"></div>
-        <div class="slider-row">
-          <div class="slider-label">
-            <span>最大調整幅度</span>
-            <strong id="max-shift-val">30 cm</strong>
+        <!-- 套疊控制 -->
+        <div id="fit-section" class="section" style="display:none">
+          <h3>套疊控制</h3>
+          <div style="font-size:.85rem;color:var(--muted);margin-bottom:8px">
+            點擊地圖上的參考點可調整個別權重
           </div>
-          <input type="range" id="max-shift-slider" min="5" max="200" value="30" step="5">
+          <button id="btn-fit" class="btn btn-primary" disabled>▶ 執行套疊</button>
+          <button id="btn-fit-send-adj" class="btn btn-secondary" style="display:none">→ 送入調整模組</button>
         </div>
-        <button id="btn-adj-run" class="btn btn-primary" disabled>▶ 執行調整</button>
-        <button id="btn-adj-gpkg" class="btn btn-green" style="display:none">📦 匯出 GeoPackage</button>
-        <button id="btn-adj-coa"  class="btn btn-secondary" style="display:none">💾 下載調整後 COA</button>
-      </div>
 
-      <!-- 調整結果 -->
-      <div id="adj-result-section" class="section" style="display:none">
-        <h3>調整結果</h3>
-        <div id="adj-result-list" style="font-size:.88rem;line-height:1.8"></div>
-        <button id="btn-manual-adj" class="btn btn-secondary" style="display:none;margin-top:8px">✏️ 手動調整</button>
-      </div>
+        <!-- 統計 -->
+        <div class="section">
+          <h3>資料統計</h3>
+          <div class="stat-grid">
+            <div class="stat-box"><div class="label">界址線段</div><div class="value" id="stat-segs">—</div></div>
+            <div class="stat-box"><div class="label">參考點</div><div class="value" id="stat-ref">—</div></div>
+            <div class="stat-box"><div class="label">RMSE</div><div class="value" id="stat-rmse">—</div></div>
+            <div class="stat-box"><div class="label">最大垂距</div><div class="value" id="stat-max">—</div></div>
+            <div class="stat-box" style="grid-column:span 2"><div class="label">參與套疊 / 總參考點</div><div class="value" id="stat-used">—</div></div>
+          </div>
+        </div>
 
-      <!-- 調整圖層 -->
-      <div class="section">
-        <h3>圖層顯示</h3>
-        <div class="toggle-row"><span>調整前輪廓（紅）</span><label class="toggle"><input id="adj-layer-before" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>調整後輪廓（綠）</span><label class="toggle"><input id="adj-layer-after" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>宗地標籤</span><label class="toggle"><input id="adj-layer-labels" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>登記面積</span><label class="toggle"><input id="adj-layer-reg-area" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>計算面積</span><label class="toggle"><input id="adj-layer-calc-area" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>較差</span><label class="toggle"><input id="adj-layer-diff" type="checkbox" checked><span class="slider"></span></label></div>
-        <div class="toggle-row"><span>公差</span><label class="toggle"><input id="adj-layer-tol" type="checkbox" checked><span class="slider"></span></label></div>
-      </div>
+        <!-- 套疊結果參數 -->
+        <div id="params-section" class="section" style="display:none">
+          <h3>套疊結果</h3>
+          <div class="param-row"><span>旋轉角 θ</span><span class="val" id="param-theta">—</span></div>
+          <div class="param-row"><span>N 平移 ty</span><span class="val" id="param-ty">—</span></div>
+          <div class="param-row"><span>E 平移 tx</span><span class="val" id="param-tx">—</span></div>
+        </div>
 
-      <!-- 調整圖例 -->
-      <div class="section">
-        <h3>圖例</h3>
-        <div class="legend-item"><div class="legend-circle" style="background:#3ecf6e"></div><span>面積在公差內</span></div>
-        <div class="legend-item"><div class="legend-circle" style="background:#f05252"></div><span>面積超出公差</span></div>
-        <div class="legend-item"><div class="legend-line" style="background:#f05252;border:1px dashed #f05252"></div><span>調整前輪廓</span></div>
-        <div class="legend-item"><div class="legend-line" style="background:#3ecf6e"></div><span>調整後輪廓</span></div>
-      </div>
+        <!-- 選中點 -->
+        <div id="point-panel" class="section">
+          <h3>選中點設定</h3>
+          <div class="point-info">（尚未選取）</div>
+          <div class="weight-buttons">
+            <button class="weight-btn">排除</button>
+            <button class="weight-btn">×0.25</button>
+            <button class="weight-btn">×0.5</button>
+            <button class="weight-btn active">×1</button>
+            <button class="weight-btn">×2</button>
+            <button class="weight-btn">×4</button>
+          </div>
+        </div>
 
-    </div><!-- /tab-adj -->
+        <!-- 圖層 -->
+        <div class="section">
+          <h3>圖層顯示</h3>
+          <div class="toggle-row"><span>原始界址線</span><label class="toggle"><input id="layer-original" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>套疊後界址線</span><label class="toggle"><input id="layer-fitted" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>垂距殘差線</span><label class="toggle"><input id="layer-residuals" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>套疊標籤</span><label class="toggle"><input id="layer-labels" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>界址點</span><label class="toggle"><input id="layer-boundary" type="checkbox" checked><span class="slider"></span></label></div>
+        </div>
 
-  </div><!-- /sidebar -->
+        <!-- 圖例 -->
+        <div class="section">
+          <h3>圖例</h3>
+          <div class="legend-item"><div class="legend-line" style="background:rgba(70,120,200,.7)"></div><span>原始界址線</span></div>
+          <div class="legend-item"><div class="legend-line" style="background:#3ecf6e"></div><span>套疊後界址線</span></div>
+          <div class="legend-item"><div class="legend-circle" style="background:#3ecf6e"></div><span>殘差 &lt;0.1 m（良好）</span></div>
+          <div class="legend-item"><div class="legend-circle" style="background:#f5c542"></div><span>殘差 0.1–0.5 m（注意）</span></div>
+          <div class="legend-item"><div class="legend-circle" style="background:#f05252"></div><span>殘差 &gt;0.5 m（異常）</span></div>
+          <div class="legend-item"><div class="legend-circle" style="background:rgba(200,200,255,.6)"></div><span>界址點</span></div>
+          <div class="legend-item"><div class="legend-circle" style="background:rgba(245,197,66,.7)"></div><span>旋轉中心（重心）</span></div>
+        </div>
 
-  <!-- ── 地圖畫布 ─────────────────────────────────────────────────────────── -->
+      </div><!-- /tab-fit -->
+
+      <!-- ══════════════════ 調整分頁 ══════════════════ -->
+      <div id="tab-adj" class="tab-panel">
+
+        <!-- 上傳 -->
+        <div class="section">
+          <h3>上傳地籍調整資料</h3>
+          <label id="adj-drop-zone" for="adj-file-input">
+            <div class="icon">📂</div>
+            拖放檔案或整個資料夾，或點擊選取<br>
+            <span style="font-size:.85rem;color:var(--muted)">COA · BNP · PAR</span>
+          </label>
+          <input id="adj-file-input" type="file" multiple style="position:fixed;top:-200px;left:-200px;opacity:0;width:1px;height:1px">
+          <div id="adj-file-list" style="margin-top:8px"></div>
+          <div style="font-size:.85rem;color:var(--muted);margin-top:4px">或從套圖模組帶入</div>
+          <div id="adj-from-fit" style="display:none;font-size:.85rem;color:var(--purple);margin-top:4px">✓ 已從套圖模組帶入資料</div>
+          <div class="progress-wrap" id="adj-progress"><div class="progress-bar"></div></div>
+          <button id="btn-adj-upload" class="btn btn-primary" style="margin-top:8px" disabled>解析並顯示宗地</button>
+        </div>
+
+        <!-- 調整控制 -->
+        <div id="adj-section" class="section" style="display:none">
+          <h3>調整控制</h3>
+          <div style="font-size:.85rem;color:var(--muted);margin-bottom:6px">
+            紅色＝超差宗地；勾選後執行調整
+          </div>
+          <div class="adj-toolbar">
+            <button class="btn-tiny" id="btn-adj-chk-all">全選</button>
+            <button class="btn-tiny" id="btn-adj-chk-none">全不選</button>
+          </div>
+          <div id="adj-parcel-list" style="max-height:150px;overflow-y:auto;margin-bottom:8px;padding-right:6px"></div>
+          <div class="slider-row">
+            <div class="slider-label">
+              <span>最大調整幅度</span>
+              <strong id="max-shift-val">30 cm</strong>
+            </div>
+            <input type="range" id="max-shift-slider" min="5" max="200" value="30" step="5">
+          </div>
+          <button id="btn-adj-run" class="btn btn-primary" disabled>▶ 執行調整</button>
+          <button id="btn-adj-gpkg" class="btn btn-green" style="display:none">📦 匯出 GeoPackage</button>
+          <button id="btn-adj-coa"  class="btn btn-secondary" style="display:none">💾 下載調整後 COA</button>
+        </div>
+
+        <!-- 調整結果 -->
+        <div id="adj-result-section" class="section" style="display:none">
+          <h3>調整結果</h3>
+          <div id="adj-result-list" style="font-size:.88rem;line-height:1.8"></div>
+          <button id="btn-manual-adj" class="btn btn-secondary" style="display:none;margin-top:8px">✏️ 手動調整</button>
+        </div>
+
+        <!-- 調整圖層 -->
+        <div class="section">
+          <h3>圖層顯示</h3>
+          <div class="toggle-row"><span>調整前輪廓（紅）</span><label class="toggle"><input id="adj-layer-before" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>調整後輪廓（綠）</span><label class="toggle"><input id="adj-layer-after" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>宗地標籤</span><label class="toggle"><input id="adj-layer-labels" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>登記面積</span><label class="toggle"><input id="adj-layer-reg-area" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>計算面積</span><label class="toggle"><input id="adj-layer-calc-area" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>較差</span><label class="toggle"><input id="adj-layer-diff" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>公差</span><label class="toggle"><input id="adj-layer-tol" type="checkbox" checked><span class="slider"></span></label></div>
+        </div>
+
+        <!-- 調整圖例 -->
+        <div class="section">
+          <h3>圖例</h3>
+          <div class="legend-item"><div class="legend-circle" style="background:#3ecf6e"></div><span>面積在公差內</span></div>
+          <div class="legend-item"><div class="legend-circle" style="background:#f05252"></div><span>面積超出公差</span></div>
+          <div class="legend-item"><div class="legend-line" style="background:#f05252;border:1px dashed #f05252"></div><span>調整前輪廓</span></div>
+          <div class="legend-item"><div class="legend-line" style="background:#3ecf6e"></div><span>調整後輪廓</span></div>
+        </div>
+
+      </div><!-- /tab-adj -->
+
+      <!-- ══════════════════ TWD97 分頁 ══════════════════ -->
+      <div id="tab-crs" class="tab-panel">
+        <div class="section">
+          <h3>座標系統轉換</h3>
+          <div class="crs-info">
+            <div class="crs-badge-row">
+              <span class="crs-badge twd67" id="crs-from-badge">TWD67</span>
+              <span class="crs-arrow">→</span>
+              <span class="crs-badge twd97">TWD97</span>
+            </div>
+            <p style="font-size:.85rem;color:var(--muted);margin-top:8px">
+              KC 地籍資料原始座標為 TWD67/TM2。轉換後可正確套繪現況底圖與 GPS 成果。
+              使用內政部公告三參數 Helmert 轉換（ΔX=-752.354, ΔY=-155.968, ΔZ=526.748）。
+            </p>
+          </div>
+          <button class="btn btn-primary" id="btn-crs-convert" disabled>🔄 一鍵轉 TWD97</button>
+          <div class="progress-wrap" id="crs-progress"><div class="progress-bar"></div></div>
+        </div>
+        <div id="crs-result-section" class="section" style="display:none">
+          <h3>轉換結果</h3>
+          <div class="param-row"><span>平均 ΔN</span><span class="val" id="crs-dn">—</span></div>
+          <div class="param-row"><span>平均 ΔE</span><span class="val" id="crs-de">—</span></div>
+          <div class="param-row"><span>轉換點數</span><span class="val" id="crs-count">—</span></div>
+          <div style="font-size:.82rem;color:var(--green);margin-top:6px">✓ 已切換至 TWD97 座標系統</div>
+        </div>
+      </div><!-- /tab-crs -->
+
+      <!-- ══════════════════ 底圖分頁 ══════════════════ -->
+      <div id="tab-basemap" class="tab-panel">
+        <div class="section">
+          <h3>底圖設定</h3>
+          <div style="font-size:.85rem;color:var(--muted);margin-bottom:8px">需先載入地籍資料（建議先轉 TWD97）</div>
+          <div class="toggle-row">
+            <span>顯示底圖</span>
+            <label class="toggle"><input id="basemap-visible" type="checkbox"><span class="slider"></span></label>
+          </div>
+          <div class="slider-row" style="margin-top:8px">
+            <div class="slider-label"><span>透明度</span><strong id="basemap-opacity-val">70%</strong></div>
+            <input type="range" id="basemap-opacity" min="10" max="100" value="70" step="5">
+          </div>
+        </div>
+        <div class="section">
+          <h3>底圖來源</h3>
+          <div class="radio-group">
+            <label class="radio-item"><input type="radio" name="basemap-src" value="nlsc-photo" checked> 🛰 國土測繪 航照圖</label>
+            <label class="radio-item"><input type="radio" name="basemap-src" value="nlsc-map"> 🗺 國土測繪 電子地圖</label>
+            <label class="radio-item"><input type="radio" name="basemap-src" value="osm"> 🌍 OpenStreetMap</label>
+          </div>
+        </div>
+        <div class="section">
+          <h3>座標說明</h3>
+          <div style="font-size:.82rem;color:var(--muted);line-height:1.7">
+            底圖使用 WGS84/Web Mercator。<br>
+            若資料為 TWD97，可直接套繪（誤差 &lt;1m）。<br>
+            TWD67 資料請先至「TWD97」頁面轉換。
+          </div>
+          <div id="basemap-crs-warn" style="display:none;font-size:.82rem;color:var(--yellow);margin-top:4px">
+            ⚠ 目前為 TWD67 座標，底圖偏移約 820m，建議先轉 TWD97
+          </div>
+        </div>
+      </div><!-- /tab-basemap -->
+
+    </div><!-- /panel-scroller -->
+
+    <!-- Panel collapse toggle -->
+    <button class="panel-toggle" id="panel-toggle" title="收合側欄">◀</button>
+  </div><!-- /side-panel -->
+
+  <!-- ── Canvas Area ──────────────────────────────────────────────────────────── -->
   <div class="canvas-wrap">
     <canvas id="map-canvas"></canvas>
     <div id="tooltip"></div>
-
-    <div id="pyodide-status">
-      <div class="dot-status"></div>
-      <span id="pyodide-label">Pyodide 載入中…</span>
-    </div>
 
     <div class="zoom-btns">
       <button class="zoom-btn" id="btn-zoom-in">＋</button>
@@ -233,9 +307,18 @@
       <button class="btn-tiny btn-manual-ok" id="btn-manual-confirm">✓ 套用</button>
       <button class="btn-tiny" id="btn-manual-exit">✕ 離開</button>
     </div>
-  </div>
+  </div><!-- /canvas-wrap -->
 
-</div><!-- /layout -->
+</div><!-- /workspace -->
+
+<!-- ── Status Bar ─────────────────────────────────────────────────────────────── -->
+<div class="status-bar">
+  <span id="status-coords">N: —  E: —</span>
+  <span class="status-sep"></span>
+  <span id="status-zoom">×—</span>
+  <span class="status-sep"></span>
+  <span id="status-module">套圖</span>
+</div>
 
 <div id="toast"></div>
 
@@ -251,8 +334,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="js/gpkg_writer.js?v=0.8"></script>
-<script src="js/dxf_writer.js?v=0.8"></script>
-<script src="js/app.js?v=0.81"></script>
+<script src="js/gpkg_writer.js?v=0.9"></script>
+<script src="js/dxf_writer.js?v=0.9"></script>
+<script src="js/app.js?v=0.9"></script>
 </body>
 </html>

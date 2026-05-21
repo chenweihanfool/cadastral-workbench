@@ -15,27 +15,53 @@
 }
 html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 15px; background: var(--bg); color: var(--text); overflow: hidden; }
 
-/* ── Layout ──────────────────────────────────────────────────────────────── */
-.layout { display: flex; height: calc(100vh - 44px); }
-.sidebar { width: 270px; min-width: 270px; background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; display: flex; flex-direction: column; gap: 0; }
-.canvas-wrap { flex: 1; position: relative; background: #0c0e16; overflow: hidden; }
+/* ── Title Bar (36px) ────────────────────────────────────────────────────── */
+.title-bar { height: 36px; background: #10131f; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 12px; gap: 8px; flex-shrink: 0; }
+.title-brand { font-size: .95rem; font-weight: 700; color: #e2e8f0; letter-spacing: .02em; }
+.badge { background: var(--accent); color: #fff; font-size: .72rem; padding: 2px 7px; border-radius: 999px; font-weight: 600; cursor: pointer; user-select: none; }
+.badge:hover { background: #2563eb; }
+.spacer { flex: 1; }
+
+/* ── Pyodide status (now in title bar) ───────────────────────────────────── */
+#pyodide-status { background: transparent; border: none; border-radius: 6px; padding: 4px 10px; font-size: .82rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+#pyodide-status .dot-status { width: 7px; height: 7px; border-radius: 50%; background: var(--yellow); flex-shrink: 0; }
+#pyodide-status.ready .dot-status { background: var(--green); }
+#pyodide-status.error .dot-status { background: var(--red); }
+
+/* ── Toolbar (44px) ──────────────────────────────────────────────────────── */
+.toolbar { height: 44px; background: #161929; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 8px; gap: 2px; flex-shrink: 0; }
+.tb-btn { height: 32px; padding: 0 12px; border: none; border-radius: 5px; background: transparent; color: var(--muted); font-size: .88rem; font-weight: 600; cursor: pointer; transition: color .12s, background .12s; white-space: nowrap; }
+.tb-btn:hover:not(.active) { color: var(--text); background: rgba(255,255,255,.05); }
+.tb-btn.active { color: var(--accent); background: rgba(59,130,246,.12); }
+.tb-sep { flex: 1; }
+.tb-action-btn { height: 30px; padding: 0 11px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--text); font-size: .85rem; cursor: pointer; transition: background .12s; white-space: nowrap; }
+.tb-action-btn:hover { background: var(--border); }
+.tb-action-green { border-color: #166534; color: #bbf7d0; background: rgba(22,101,52,.25); }
+.tb-action-green:hover { background: rgba(22,101,52,.5); }
+
+/* ── Workspace (flex:1) ───────────────────────────────────────────────────── */
+.workspace { display: flex; flex-direction: row; flex: 1; height: calc(100vh - 36px - 44px - 24px); overflow: hidden; }
+
+/* ── Side Panel (280px, collapsible) ─────────────────────────────────────── */
+.side-panel { position: relative; width: 280px; min-width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; transition: min-width .2s, width .2s; }
+.side-panel.collapsed { width: 0; min-width: 0; border-right: none; }
+.panel-scroller { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; }
+.panel-toggle { position: absolute; top: 50%; right: -14px; transform: translateY(-50%); width: 14px; height: 48px; background: var(--surface); border: 1px solid var(--border); border-left: none; border-radius: 0 5px 5px 0; color: var(--muted); font-size: .7rem; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10; transition: background .12s, color .12s; padding: 0; line-height: 1; }
+.panel-toggle:hover { background: var(--border); color: var(--text); }
+.side-panel.collapsed .panel-toggle { right: -14px; border-left: 1px solid var(--border); border-radius: 5px; }
+
+/* ── Canvas wrap ──────────────────────────────────────────────────────────── */
+.canvas-wrap { flex: 1; position: relative; background: #0c0e16; overflow: hidden; min-width: 0; }
 canvas { position: absolute; inset: 0; cursor: grab; display: block; }
 canvas.panning { cursor: grabbing; }
 
-/* ── Header ──────────────────────────────────────────────────────────────── */
-header { height: 44px; background: #161929; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 14px; gap: 10px; flex-shrink: 0; }
-header h1 { font-size: 1rem; font-weight: 700; color: #e2e8f0; letter-spacing: .02em; }
-.badge { background: var(--accent); color: #fff; font-size: .75rem; padding: 2px 7px; border-radius: 999px; font-weight: 600; cursor: pointer; user-select: none; }
-.badge:hover { background: #2563eb; }
-.spacer { flex: 1; }
-#btn-download { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: .9rem; display: none; }
-#btn-download:hover { background: #2563eb; }
+/* ── Status Bar (24px) ───────────────────────────────────────────────────── */
+.status-bar { height: 24px; background: #10131f; border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 12px; gap: 0; font-size: .78rem; color: var(--muted); font-family: 'Consolas', monospace; flex-shrink: 0; }
+.status-sep { width: 1px; height: 14px; background: var(--border); margin: 0 12px; }
+#status-zoom { min-width: 48px; text-align: center; }
+#status-module { color: var(--accent); font-size: .77rem; }
 
-/* ── Module tabs ─────────────────────────────────────────────────────────── */
-.tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.tab-btn { flex: 1; padding: 9px 6px; text-align: center; font-size: .9rem; font-weight: 600; color: var(--muted); background: transparent; border: none; cursor: pointer; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; }
-.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-.tab-btn:hover:not(.active) { color: var(--text); }
+/* ── Module tabs (inside panel) ──────────────────────────────────────────── */
 .tab-panel { display: none; }
 .tab-panel.active { display: block; }
 
@@ -110,18 +136,14 @@ header h1 { font-size: 1rem; font-weight: 700; color: #e2e8f0; letter-spacing: .
 .tt-warn { color: var(--yellow); }
 .tt-bad  { color: var(--red); }
 
-.zoom-btns { position: absolute; bottom: 60px; right: 14px; display: flex; flex-direction: column; gap: 4px; }
+.zoom-btns { position: absolute; bottom: 16px; right: 14px; display: flex; flex-direction: column; gap: 4px; }
 .zoom-btn { width: 32px; height: 32px; background: rgba(26,29,39,.92); border: 1px solid var(--border); border-radius: 6px; color: var(--text); cursor: pointer; font-size: 1.1rem; display: flex; align-items: center; justify-content: center; transition: background .12s; }
 .zoom-btn:hover { background: var(--border); }
 
 #hint { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); background: rgba(10,12,20,.7); color: var(--muted); font-size: .85rem; padding: 4px 14px; border-radius: 999px; pointer-events: none; }
-#pyodide-status { position: absolute; top: 12px; right: 14px; background: rgba(10,12,20,.85); border: 1px solid var(--border); border-radius: 6px; padding: 5px 12px; font-size: .85rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
-#pyodide-status .dot-status { width: 7px; height: 7px; border-radius: 50%; background: var(--yellow); flex-shrink: 0; }
-#pyodide-status.ready .dot-status { background: var(--green); }
-#pyodide-status.error .dot-status { background: var(--red); }
 
 /* ── Toast ───────────────────────────────────────────────────────────────── */
-#toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(60px); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 20px; font-size: .95rem; opacity: 0; transition: transform .25s, opacity .25s; pointer-events: none; z-index: 100; }
+#toast { position: fixed; bottom: 34px; left: 50%; transform: translateX(-50%) translateY(60px); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 20px; font-size: .95rem; opacity: 0; transition: transform .25s, opacity .25s; pointer-events: none; z-index: 100; }
 #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
 #toast.error { border-color: var(--red); color: var(--red); }
 
@@ -173,3 +195,15 @@ input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
 #manual-toolbar select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:4px; padding:2px 5px; font-size:.82rem; cursor:pointer; }
 .btn-manual-ok { background:var(--accent)!important; color:#fff!important; border-color:var(--accent)!important; }
 .btn-manual-ok:hover { background:#2563eb!important; }
+
+/* ── CRS badges ──────────────────────────────────────────────────────────── */
+.crs-badge-row { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.crs-badge { padding:3px 10px; border-radius:4px; font-size:.85rem; font-weight:700; }
+.crs-badge.twd67 { background:rgba(20,80,20,.7); color:#6ee86e; border:1px solid #2a5a2a; }
+.crs-badge.twd97 { background:var(--accent); color:#fff; }
+.crs-arrow { color:var(--muted); font-size:1.1rem; }
+
+/* ── Basemap radio group ──────────────────────────────────────────────────── */
+.radio-group { display:flex; flex-direction:column; gap:6px; }
+.radio-item { display:flex; align-items:center; gap:6px; font-size:.9rem; cursor:pointer; }
+.radio-item input { accent-color:var(--accent); }
