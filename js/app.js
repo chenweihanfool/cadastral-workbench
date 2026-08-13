@@ -1607,6 +1607,20 @@ function enterManualMode() {
   MANUAL.hover      = null;
   MANUAL.step       = parseFloat(document.getElementById('manual-step')?.value ?? '0.01');
 
+  // 自動縮放到本次自動調整過的宗地：資料筆數多時（例如整個地段上千筆宗地）畫面若還停在
+  // 全域縮放比例，這幾筆宗地會小到只剩幾像素——標籤/較差資訊文字全部擠在一起看不清楚，
+  // 且點擊選取的判定半徑（螢幕 10px）換算成實際距離會涵蓋到隔壁完全不同的宗地，
+  // 導致以為在調整這筆卻誤選、誤動到鄰地的界址點。進入手動模式時先框選這幾筆宗地，
+  // 才能看清楚資訊、精準點選。
+  if (ADJ.result && ADJ.result.adjusted_parcels.length) {
+    const allPts = [];
+    for (const ap of ADJ.result.adjusted_parcels) {
+      const c = MANUAL.coords[ap.label];
+      if (c) allPts.push(...c);
+    }
+    if (allPts.length) zoomToParcel(allPts);
+  }
+
   const tb = document.getElementById('manual-toolbar');
   if (tb) tb.style.display = 'flex';
   const ht = document.getElementById('hint');
