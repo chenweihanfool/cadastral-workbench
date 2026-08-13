@@ -120,6 +120,20 @@ function residualColor(d) {
   return '#f05252';
 }
 
+// ── 地號較差資訊文字字級：隨畫布縮放比例同步縮放（不再固定死在窄範圍），
+// 並依文字所在位置離畫面中心的距離做衰減——放大到某地號時該地號多半在
+// 畫面中央，文字會明顯放大方便閱讀；畫面邊緣的地號文字則不會等比放大到
+// 爆版，維持地籍線為主體的畫面感。縮小時同理會跟著明顯縮小。
+function scaledFontSize(baseMult, sx, sy, minPx, maxPx) {
+  const raw = view.scale * baseMult;
+  const clamped = Math.max(minPx, Math.min(maxPx, raw));
+  const cx = canvas.width / 2, cy = canvas.height / 2;
+  const maxDist = Math.hypot(cx, cy) || 1;
+  const t = Math.min(1, Math.hypot(sx - cx, sy - cy) / maxDist); // 0=中心 1=角落
+  const falloff = 1 - 0.55 * t;
+  return Math.max(minPx, clamped * falloff);
+}
+
 // ── TWD97/TM2 → WGS84 lat/lon (GRS80) ───────────────────────────────────────
 const _GRS80_a   = 6378137.0;
 const _GRS80_e2  = 2/298.257222101 - (1/298.257222101)**2;
@@ -466,13 +480,14 @@ function renderAdj(W, H) {
       let yOff = 0;
 
       if (ADJ.layers.labels) {
-        ctx.font = `${Math.max(9, Math.min(11, view.scale * 0.8))}px Consolas`;
+        const labelFs = scaledFontSize(0.8, sx, sy, 6, 26);
+        ctx.font = `${labelFs}px Consolas`;
         const tw = ctx.measureText(p.label).width;
         ctx.fillStyle = 'rgba(10,12,18,.7)';
-        ctx.fillRect(sx - tw / 2 - 3, sy - 10, tw + 6, 14);
+        ctx.fillRect(sx - tw / 2 - 3, sy - labelFs * 0.7, tw + 6, labelFs + 4);
         ctx.fillStyle = col;
         ctx.fillText(p.label, sx, sy);
-        yOff = 16;
+        yOff = labelFs + 5;
       }
 
       if (showExtra) {
@@ -483,7 +498,7 @@ function renderAdj(W, H) {
         if (ADJ.layers.adjDiff)  infoLines.push(`較差: ${(ap ? ap.diff_after : p.diff).toFixed(2)} m²`);
         if (ADJ.layers.adjTol)   infoLines.push(`公差: ±${p.tol.toFixed(2)} m²`);
 
-        const infoFs = Math.max(8, Math.min(10, view.scale * 0.7));
+        const infoFs = scaledFontSize(0.7, sx, sy, 5, 22);
         ctx.font = `${infoFs}px Consolas`;
         const lineH = infoFs + 4;
         infoLines.forEach((line, i) => {
@@ -1898,16 +1913,19 @@ function renderAdjManual(W, H) {
     const [sx, sy] = worldToScreen(cy_, cx_);
     const col  = ma.ok ? '#3ecf6e' : '#f05252';
 
-    ctx.font = `${Math.max(9, Math.min(11, view.scale * 0.8))}px Consolas`;
+    const labelFs = scaledFontSize(0.8, sx, sy, 6, 26);
+    ctx.font = `${labelFs}px Consolas`;
     const tw0 = ctx.measureText(label).width;
-    ctx.fillStyle = 'rgba(10,12,18,.7)'; ctx.fillRect(sx - tw0 / 2 - 3, sy - 11, tw0 + 6, 14);
+    ctx.fillStyle = 'rgba(10,12,18,.7)'; ctx.fillRect(sx - tw0 / 2 - 3, sy - labelFs * 0.7, tw0 + 6, labelFs + 4);
     ctx.fillStyle = col; ctx.fillText(label, sx, sy);
 
     const diffTxt = `差${ma.diff.toFixed(2)}`;
-    ctx.font = `${Math.max(8, Math.min(10, view.scale * 0.7))}px Consolas`;
+    const diffFs = scaledFontSize(0.7, sx, sy, 5, 22);
+    ctx.font = `${diffFs}px Consolas`;
     const tw1 = ctx.measureText(diffTxt).width;
-    ctx.fillStyle = 'rgba(10,12,18,.7)'; ctx.fillRect(sx - tw1 / 2 - 2, sy + 4, tw1 + 4, 13);
-    ctx.fillStyle = col; ctx.fillText(diffTxt, sx, sy + 15);
+    const diffY = sy + labelFs * 0.6 + diffFs;
+    ctx.fillStyle = 'rgba(10,12,18,.7)'; ctx.fillRect(sx - tw1 / 2 - 2, diffY - diffFs, tw1 + 4, diffFs + 4);
+    ctx.fillStyle = col; ctx.fillText(diffTxt, sx, diffY);
   }
 
   function highlightEdge(label, i, j, strokeCol, lineW) {
