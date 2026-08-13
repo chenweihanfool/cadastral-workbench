@@ -47,6 +47,7 @@ const MANUAL = {
   areas:      {},          // label → { area, reg, tol, diff, ok }
   history:    [],          // undo stack：每次移動前 push coords 快照（最多 80 步）
   baseline:   {},          // label → [[y,x], ...]  進入手動模式（或按重設）當下的快照，畫布上以虛線對照顯示
+  relevantLabels: new Set(), // 本次自動調整過的宗地 + 拓樸上真正共用界址點的鄰地，畫布只對這些顯示完整標籤/較差資訊
 };
 
 const BASEMAP = { visible: false, opacity: 70, provider: 'google-hybrid' };
@@ -1557,7 +1558,12 @@ function initManualCoords() {
     MANUAL.coords[p.label] = p.coords_after.map(c => [c[0], c[1]]);
   }
 
+  // relevantLabels：本次自動調整過的宗地 + 實際共用界址點的鄰地（拓樸上真正相鄰，
+  // 不是「畫面上剛好在附近」）。畫布只對這些宗地顯示完整標籤/較差資訊，
+  // 避免資料密集區域（一個小範圍內幾十甚至上百筆宗地）縮放進去後全部標籤擠在一起
   const adjKeys = new Set(ADJ.result.adjusted_parcels.map(p => p.label));
+  MANUAL.relevantLabels = new Set(adjKeys);
+
   for (const ap of ADJ.result.adjusted_parcels) {
     const n = Math.min(ap.coords_before.length, ap.coords_after.length);
     for (let i = 0; i < n; i++) {
@@ -1569,6 +1575,7 @@ function initManualCoords() {
         for (let k = 0; k < coords.length; k++) {
           if (Math.abs(coords[k][0] - by) < EPS_SHARE && Math.abs(coords[k][1] - bx) < EPS_SHARE) {
             coords[k] = [ay, ax];
+            MANUAL.relevantLabels.add(label);
           }
         }
       }
@@ -1875,8 +1882,15 @@ function renderAdjManual(W, H) {
   }
   ctx.setLineDash([]);
 
+  // 標籤/較差文字只畫「本次自動調整過的宗地」+「拓樸上真正共用界址點的鄰地」+目前選取/滑鼠懸停的宗地，
+  // 其餘宗地只有前面畫的淡色輪廓（無文字）——資料密集區域縮放進去常有幾十甚至上百筆宗地同時入鏡，
+  // 全部都顯示文字會擠成一團完全看不清楚，也會讓人誤以為那些宗地「跑掉了」
+  const interactedLabels = new Set(MANUAL.selections.map(s => s.label));
+  if (MANUAL.hover) interactedLabels.add(MANUAL.hover.label);
+
   ctx.textAlign = 'center';
   for (const [label, coords] of Object.entries(MANUAL.coords)) {
+    if (!MANUAL.relevantLabels.has(label) && !interactedLabels.has(label)) continue;
     const ma = MANUAL.areas[label];
     if (!ma || !coords.length) continue;
     const cy_ = coords.reduce((s, c) => s + c[0], 0) / coords.length;

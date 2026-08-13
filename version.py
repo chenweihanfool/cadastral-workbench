@@ -7,7 +7,7 @@
 """
 
 APP_TITLE = 'CadastralWorkbench'
-APP_VERSION = '0.9.4'
+APP_VERSION = '0.9.5'
 
 GITHUB_OWNER = 'chenweihanfool'
 GITHUB_REPO = 'cadastral-workbench'
