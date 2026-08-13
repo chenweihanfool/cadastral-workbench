@@ -46,6 +46,7 @@ const MANUAL = {
   coords:     {},          // label → [[y,x], ...]  working coordinates
   areas:      {},          // label → { area, reg, tol, diff, ok }
   history:    [],          // undo stack：每次移動前 push coords 快照（最多 80 步）
+  baseline:   {},          // label → [[y,x], ...]  進入手動模式（或按重設）當下的快照，畫布上以虛線對照顯示
 };
 
 const BASEMAP = { visible: false, opacity: 70, provider: 'google-hybrid' };
@@ -1135,10 +1136,13 @@ function renderAdjResultList() {
   const list = document.getElementById('adj-result-list');
   list.innerHTML = ADJ.result.adjusted_parcels.map((p, idx) => {
     const sc = p.status === 'ok' ? 'var(--green)' : 'var(--red)';
+    const manualBadge = p.manually_edited
+      ? ` <span style="color:#f59e0b" title="含手動調整，額外位移 ${(p.manual_max_shift_cm || 0).toFixed(1)} cm">✏️ 手動 ${(p.manual_max_shift_cm || 0).toFixed(1)}cm</span>`
+      : '';
     return `<div style="border-bottom:1px solid #1e2030;padding:4px 0">
       <div style="display:flex;align-items:flex-start;gap:4px">
         <div style="flex:1;min-width:0;font-size:.88rem;line-height:1.8">
-          <b>${p.label}</b> — 最大位移 ${p.max_shift_cm.toFixed(1)} cm (${p.mode})<br>
+          <b>${p.label}</b> — 最大位移 ${p.max_shift_cm.toFixed(1)} cm (${p.mode})${manualBadge}<br>
           面積差 ${p.diff_before.toFixed(2)} → <span style="color:${sc}">${p.diff_after.toFixed(2)}</span> m²
           (公差 ±${p.tol.toFixed(2)} m²)
         </div>
@@ -1572,6 +1576,11 @@ function initManualCoords() {
   }
 
   updateManualAreas();
+  // 快照目前狀態作為畫布上的虛線對照基準（此後手動移動只更新 coords，不動 baseline）
+  MANUAL.baseline = {};
+  for (const [label, coords] of Object.entries(MANUAL.coords)) {
+    MANUAL.baseline[label] = coords.map(c => [c[0], c[1]]);
+  }
 }
 
 function updateManualAreas() {
@@ -1607,21 +1616,62 @@ function enterManualMode() {
   render();
 }
 
+/** 兩組對應點座標間的最大位移量（公分）。點數/順序不一致時回傳 0（無法比較）。 */
+function _maxShiftCm(coordsA, coordsB) {
+  if (!coordsA || !coordsB || coordsA.length !== coordsB.length) return 0;
+  let max = 0;
+  for (let i = 0; i < coordsA.length; i++) {
+    const d = Math.hypot(coordsA[i][0] - coordsB[i][0], coordsA[i][1] - coordsB[i][1]);
+    if (d > max) max = d;
+  }
+  return max * 100;
+}
+
 function exitManualMode(apply) {
   if (apply && ADJ.result) {
-    for (const ap of ADJ.result.adjusted_parcels) {
-      if (MANUAL.coords[ap.label]) {
-        ap.coords_after = MANUAL.coords[ap.label].map(c => [c[0], c[1]]);
-        const ma = MANUAL.areas[ap.label];
-        if (ma) {
-          ap.area_after = ma.area;
-          ap.diff_after = ma.diff;
-          ap.status     = ma.ok ? 'ok' : 'still_over';
-        }
+    const adjMap = {};
+    for (const ap of ADJ.result.adjusted_parcels) adjMap[ap.label] = ap;
+    let changedCount = 0;
+
+    for (const [label, liveCoords] of Object.entries(MANUAL.coords)) {
+      const baseCoords = MANUAL.baseline[label];
+      if (!_coordsChanged(baseCoords, liveCoords)) continue; // 本次手動模式沒動過這筆，略過
+      changedCount++;
+      const ma = MANUAL.areas[label];
+      let ap = adjMap[label];
+
+      if (ap) {
+        // 原本就是自動調整過的宗地：保留第一次的「純自動調整結果」供報表對照，
+        // 之後多次手動調整只累加位移，不覆蓋這個基準
+        if (!ap.coords_after_auto) ap.coords_after_auto = ap.coords_after.map(c => [c[0], c[1]]);
+        ap.manual_max_shift_cm = _maxShiftCm(ap.coords_after_auto, liveCoords);
+        ap.coords_after = liveCoords.map(c => [c[0], c[1]]);
+        if (ma) { ap.area_after = ma.area; ap.diff_after = ma.diff; ap.status = ma.ok ? 'ok' : 'still_over'; }
+        ap.manually_edited = true;
+      } else {
+        // 原本在公差內、Python 沒有調整過，但使用者手動調整了：補一筆進調整結果，
+        // 否則這個變動只存在畫布上，離開手動模式後就不見了
+        const p = ADJ.data.parcels.find(q => q.label === label);
+        if (!p || !p.coords) continue;
+        const areaBefore = shoelaceArea(p.coords);
+        const newAp = {
+          main: p.main, sub: p.sub, label: p.label,
+          coords_before:     p.coords.map(c => [c[0], c[1]]),
+          coords_after_auto: p.coords.map(c => [c[0], c[1]]),
+          coords_after:      liveCoords.map(c => [c[0], c[1]]),
+          reg: p.reg, area_before: areaBefore, area_after: ma ? ma.area : areaBefore,
+          diff_before: p.reg - areaBefore, diff_after: ma ? ma.diff : (p.reg - areaBefore),
+          tol: p.tol, max_shift_cm: 0,
+          manual_max_shift_cm: _maxShiftCm(p.coords, liveCoords),
+          mode: 'manual_only', status: ma ? (ma.ok ? 'ok' : 'still_over') : 'still_over',
+          manually_edited: true,
+        };
+        ADJ.result.adjusted_parcels.push(newAp);
       }
     }
+
     renderAdjResultList();
-    showToast('手動調整已套用');
+    showToast(changedCount ? `手動調整已套用（${changedCount} 筆宗地）` : '本次未變更任何座標');
   }
   MANUAL.active     = false;
   MANUAL.selections = [];
@@ -1716,6 +1766,10 @@ function resetToOriginalCoords() {
   MANUAL.history    = [];
   MANUAL.selections = [];
   updateManualAreas();
+  MANUAL.baseline = {};
+  for (const [label, coords] of Object.entries(MANUAL.coords)) {
+    MANUAL.baseline[label] = coords.map(c => [c[0], c[1]]);
+  }
   render();
   showToast('已回復至自動調整前原始狀態');
   document.getElementById('manual-sel-info').textContent = '點擊選取界址點/邊線/宗地，Ctrl+點擊可複選同類';
@@ -1781,6 +1835,14 @@ function moveManualSelection(dy, dx) {
 }
 
 // ── 渲染（手動模式） ─────────────────────────────────────────────────────────
+function _coordsChanged(a, b) {
+  if (!a || !b || a.length !== b.length) return true;
+  for (let i = 0; i < a.length; i++) {
+    if (Math.abs(a[i][0] - b[i][0]) > 1e-6 || Math.abs(a[i][1] - b[i][1]) > 1e-6) return true;
+  }
+  return false;
+}
+
 function renderAdjManual(W, H) {
   if (!MANUAL.active || !ADJ.data) return;
 
@@ -1789,6 +1851,15 @@ function renderAdjManual(W, H) {
     const col = ma ? (ma.ok ? 'rgba(62,207,110,.35)' : 'rgba(240,82,82,.35)') : 'rgba(100,100,120,.3)';
     drawPolygon(coords, col, 1);
   }
+
+  // 進入手動模式（或按重設）當下的基準狀態：橘色虛線，只在已移動過的宗地顯示，供對照本次手動調整改了哪裡
+  ctx.setLineDash([5, 4]);
+  for (const [label, baseCoords] of Object.entries(MANUAL.baseline)) {
+    const liveCoords = MANUAL.coords[label];
+    if (!_coordsChanged(baseCoords, liveCoords)) continue;
+    drawPolygon(baseCoords, 'rgba(245,158,11,.85)', 1.5, false);
+  }
+  ctx.setLineDash([]);
 
   ctx.textAlign = 'center';
   for (const [label, coords] of Object.entries(MANUAL.coords)) {
@@ -1965,10 +2036,13 @@ function drawPDFPage(oc, W, H, p) {
     ['面積較差（前）', `${p.diff_before.toFixed(4)} m²`],
     ['面積較差（後）', `${p.diff_after.toFixed(4)} m²`],
     ['公差', `±${p.tol.toFixed(4)} m²`],
-    ['最大位移量', `${p.max_shift_cm.toFixed(2)} cm`],
+    ['自動調整位移', `${p.max_shift_cm.toFixed(2)} cm`],
     ['調整模式', p.mode],
-    ['調整結果', p.status === 'ok' ? '✓ 進入公差範圍' : '⚠ 仍超出公差'],
   ];
+  if (p.manually_edited) {
+    rows.push(['手動調整', `是（額外位移 ${(p.manual_max_shift_cm || 0).toFixed(2)} cm）`]);
+  }
+  rows.push(['調整結果', p.status === 'ok' ? '✓ 進入公差範圍' : '⚠ 仍超出公差']);
   const COL1 = MARGIN, COL2 = MARGIN + 200;
   const ROW_H = 26;
   oc.font = 'bold 12px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
@@ -2006,22 +2080,28 @@ function drawPDFPage(oc, W, H, p) {
   y += diagH + 16;
 
   const legendItems = [
-    { col: '#f05252', dash: true,  label: '調整前輪廓' },
-    { col: '#3ecf6e', dash: false, label: '調整後輪廓' },
-    { col: '#f5c542', dash: false, label: '最大位移點' },
+    { col: '#f05252', dash: true,  label: '原始輪廓' },
   ];
-  let lx = MARGIN;
+  if (p.manually_edited) {
+    legendItems.push({ col: '#f59e0b', dash: true, label: '自動後／手動前' });
+    legendItems.push({ col: '#38bdf8', dash: false, label: '手動調整位移' });
+  }
+  legendItems.push({ col: '#3ecf6e', dash: false, label: '最終調整後輪廓' });
+  legendItems.push({ col: '#f5c542', dash: false, label: '最大位移點' });
+
+  const PER_ROW = 3, COL_W = 155, ROW_H2 = 22;
   oc.font = '11px "Microsoft JhengHei", "Noto Sans TC", sans-serif';
-  for (const item of legendItems) {
+  legendItems.forEach((item, i) => {
+    const lx = MARGIN + (i % PER_ROW) * COL_W;
+    const ly = y + 10 + Math.floor(i / PER_ROW) * ROW_H2;
     oc.strokeStyle = item.col; oc.lineWidth = 2;
     if (item.dash) oc.setLineDash([6, 4]); else oc.setLineDash([]);
-    oc.beginPath(); oc.moveTo(lx, y + 10); oc.lineTo(lx + 28, y + 10); oc.stroke();
+    oc.beginPath(); oc.moveTo(lx, ly); oc.lineTo(lx + 26, ly); oc.stroke();
     oc.setLineDash([]);
     oc.fillStyle = '#374151'; oc.textAlign = 'left';
-    oc.fillText(item.label, lx + 34, y + 14);
-    lx += 120;
-  }
-  y += 30;
+    oc.fillText(item.label, lx + 32, ly + 4);
+  });
+  y += 20 + Math.ceil(legendItems.length / PER_ROW) * ROW_H2;
 
   oc.fillStyle = '#9ca3af';
   oc.font = '10px "Consolas", monospace';
@@ -2033,11 +2113,13 @@ function drawPDFPage(oc, W, H, p) {
 
 function drawParcelDiagramInPDF(oc, ox, oy, W, H, p) {
   const before = p.coords_before;
-  const after  = p.coords_after;
+  const after  = p.coords_after;         // 最終結果（含手動調整）
+  const hasManual = !!(p.manually_edited && p.coords_after_auto);
+  const auto = hasManual ? p.coords_after_auto : null;   // 純自動調整結果（手動調整前）
   if (!before || !after || !before.length || !after.length) return;
 
-  const allY = [...before.map(c => c[0]), ...after.map(c => c[0])];
-  const allX = [...before.map(c => c[1]), ...after.map(c => c[1])];
+  const allY = [...before.map(c => c[0]), ...after.map(c => c[0]), ...(auto ? auto.map(c => c[0]) : [])];
+  const allX = [...before.map(c => c[1]), ...after.map(c => c[1]), ...(auto ? auto.map(c => c[1]) : [])];
   const minY = Math.min(...allY), maxY = Math.max(...allY);
   const minX = Math.min(...allX), maxX = Math.max(...allX);
   const rY = maxY - minY || 1, rX = maxX - minX || 1;
@@ -2050,14 +2132,42 @@ function drawParcelDiagramInPDF(oc, ox, oy, W, H, p) {
     return [offX + (wx - minX) * sc, offY + (maxY - wy) * sc];
   }
 
-  oc.strokeStyle = '#f05252'; oc.lineWidth = 1.5; oc.setLineDash([8, 5]);
-  oc.beginPath();
-  before.forEach((c, i) => {
-    const [cx_, cy_] = toCanvas(c[0], c[1]);
-    if (i === 0) oc.moveTo(cx_, cy_); else oc.lineTo(cx_, cy_);
-  });
-  oc.closePath(); oc.stroke(); oc.setLineDash([]);
+  function strokePolygon(coords, color, lineWidth, dash) {
+    oc.strokeStyle = color; oc.lineWidth = lineWidth;
+    oc.setLineDash(dash || []);
+    oc.beginPath();
+    coords.forEach((c, i) => {
+      const [cx_, cy_] = toCanvas(c[0], c[1]);
+      if (i === 0) oc.moveTo(cx_, cy_); else oc.lineTo(cx_, cy_);
+    });
+    oc.closePath(); oc.stroke(); oc.setLineDash([]);
+  }
 
+  function drawArrows(fromCoords, toCoords, color) {
+    const n = Math.min(fromCoords.length, toCoords.length);
+    for (let i = 0; i < n; i++) {
+      const [bx_, by_] = toCanvas(fromCoords[i][0], fromCoords[i][1]);
+      const [ax_, ay_] = toCanvas(toCoords[i][0],   toCoords[i][1]);
+      const dist = Math.hypot(ax_ - bx_, ay_ - by_);
+      if (dist <= 0.5) continue;
+      oc.strokeStyle = color; oc.lineWidth = 1;
+      oc.beginPath(); oc.moveTo(bx_, by_); oc.lineTo(ax_, ay_); oc.stroke();
+      const angle = Math.atan2(ay_ - by_, ax_ - bx_);
+      const AL = 6;
+      oc.beginPath();
+      oc.moveTo(ax_, ay_);
+      oc.lineTo(ax_ - AL * Math.cos(angle - 0.4), ay_ - AL * Math.sin(angle - 0.4));
+      oc.lineTo(ax_ - AL * Math.cos(angle + 0.4), ay_ - AL * Math.sin(angle + 0.4));
+      oc.closePath(); oc.fillStyle = color; oc.fill();
+    }
+  }
+
+  // 原始輪廓
+  strokePolygon(before, '#f05252', 1.5, [8, 5]);
+  // 自動調整後（手動調整前）：只有手動調整過的宗地才畫，作為中間對照
+  if (hasManual) strokePolygon(auto, '#f59e0b', 1.3, [3, 3]);
+
+  // 最終調整後輪廓（實心填色）
   oc.strokeStyle = '#3ecf6e'; oc.lineWidth = 2; oc.setLineDash([]);
   oc.fillStyle = 'rgba(62,207,110,0.08)';
   oc.beginPath();
@@ -2067,23 +2177,18 @@ function drawParcelDiagramInPDF(oc, ox, oy, W, H, p) {
   });
   oc.closePath(); oc.fill(); oc.stroke();
 
+  // 位移向量：有手動調整時拆成「自動調整」「手動調整」兩段箭頭；否則單一段
+  if (hasManual) {
+    drawArrows(before, auto, 'rgba(167,139,250,0.7)');
+    drawArrows(auto, after, 'rgba(56,189,248,0.85)');
+  } else {
+    drawArrows(before, after, 'rgba(167,139,250,0.7)');
+  }
+
+  // 最大位移點：以「原始 → 最終」的實際距離為準（無論位移是自動或手動造成）
   let maxShift = 0, maxPt = null;
   const n = Math.min(before.length, after.length);
   for (let i = 0; i < n; i++) {
-    const [bx_, by_] = toCanvas(before[i][0], before[i][1]);
-    const [ax_, ay_] = toCanvas(after[i][0],  after[i][1]);
-    const dist = Math.hypot(ax_ - bx_, ay_ - by_);
-    if (dist > 0.5) {
-      oc.strokeStyle = 'rgba(167,139,250,0.7)'; oc.lineWidth = 1;
-      oc.beginPath(); oc.moveTo(bx_, by_); oc.lineTo(ax_, ay_); oc.stroke();
-      const angle = Math.atan2(ay_ - by_, ax_ - bx_);
-      const AL = 6;
-      oc.beginPath();
-      oc.moveTo(ax_, ay_);
-      oc.lineTo(ax_ - AL * Math.cos(angle - 0.4), ay_ - AL * Math.sin(angle - 0.4));
-      oc.lineTo(ax_ - AL * Math.cos(angle + 0.4), ay_ - AL * Math.sin(angle + 0.4));
-      oc.closePath(); oc.fillStyle = 'rgba(167,139,250,0.9)'; oc.fill();
-    }
     const worldDist = Math.hypot(after[i][0] - before[i][0], after[i][1] - before[i][1]);
     if (worldDist > maxShift) { maxShift = worldDist; maxPt = i; }
   }
@@ -2097,7 +2202,7 @@ function drawParcelDiagramInPDF(oc, ox, oy, W, H, p) {
     oc.fillStyle = '#92400e';
     oc.font = 'bold 10px "Consolas", monospace';
     oc.textAlign = 'left';
-    oc.fillText(`max: ${p.max_shift_cm.toFixed(2)} cm`, ax_ + 10, ay_ + 4);
+    oc.fillText(`max: ${(maxShift * 100).toFixed(2)} cm`, ax_ + 10, ay_ + 4);
   }
 
   const scaleM  = 1;

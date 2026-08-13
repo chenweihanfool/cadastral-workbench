@@ -67,6 +67,30 @@
 
 ---
 
+## 單機執行檔（免安裝）
+
+除了 GitHub Pages 線上版，也提供 Windows 單一 .exe，免安裝 Python，雙擊即可使用：
+
+- 從 [Releases](https://github.com/chenweihanfool/cadastral-workbench/releases) 下載最新的 `CadastralWorkbench.exe`
+- 雙擊執行：會在本機開啟一個小型伺服器（僅限 127.0.0.1），並自動開啟瀏覽器分頁
+- 每次啟動會在背景檢查 GitHub 上是否有更新版本；有的話會自動下載、取代自己並重新啟動（離線或檢查失敗時安靜略過，不影響照常使用）
+- 保留視窗開啟中的黑色主控台視窗即為伺服器；關閉該視窗或按 Ctrl-C 即可結束
+
+### 建置 / 發布新版 exe
+
+```bash
+pip install pyinstaller
+pyinstaller CadastralWorkbench.spec
+```
+
+發布流程：
+1. 更新 `version.py` 的 `APP_VERSION`，並同步更新 `js/version.js` 的 `CW_VERSION`（含開發日誌）
+2. `git tag v{APP_VERSION}` 後 `git push --tags`
+3. GitHub Actions（`.github/workflows/release.yml`）會自動建置並發佈 Release，含 `CadastralWorkbench.exe`
+4. 舊版 exe 下次啟動時會自動偵測到新版並自我更新
+
+---
+
 ## 相關專案
 
 - [fit-cadastral](https://github.com/chenweihanfool/fit-cadastral) — 地籍圖自動套圖演算法

@@ -8,6 +8,7 @@ __pycache__/
 build/
 dist/
 *.spec
+!CadastralWorkbench.spec
 
 # Virtual environments
 venv/

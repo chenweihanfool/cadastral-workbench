@@ -17,7 +17,11 @@ import sys
 import http.server
 import socketserver
 import threading
+import time
 import webbrowser
+
+import version
+import updater
 
 FROZEN = getattr(sys, "frozen", False)
 
@@ -49,15 +53,30 @@ class ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
 
+def _check_for_update():
+    # Runs on a background thread so it never blocks the server or the
+    # browser from opening. Any failure (offline, GitHub unreachable, no
+    # release yet) is swallowed inside updater.check_and_prepare_update —
+    # this always falls through to "no update" rather than raising.
+    triggered = updater.check_and_prepare_update(version.APP_VERSION, log=print)
+    if triggered:
+        print("即將重新啟動套用新版本…")
+        time.sleep(1.2)
+        os._exit(0)
+
+
 if __name__ == "__main__":
     host = "127.0.0.1" if FROZEN else "0.0.0.0"
     with ReusableTCPServer((host, PORT), Handler) as httpd:
         url = f"http://127.0.0.1:{PORT}"
-        print(f"CadastralWorkbench  →  {url}")
+        print(f"CadastralWorkbench v{version.APP_VERSION}  →  {url}")
         print("Close this window (or press Ctrl-C) to stop.")
         if FROZEN:
             # Open the browser slightly after serve_forever() starts
             # accepting connections, on a background thread so it doesn't
             # block the server from starting.
             threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+            # Self-update check only makes sense for the packaged exe —
+            # `python main.py` in dev always runs the checked-out source.
+            threading.Thread(target=_check_for_update, daemon=True).start()
         httpd.serve_forever()
