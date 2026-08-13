@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CadastralWorkbench</title>
-<link rel="stylesheet" href="css/style.css?v=0.9.3">
-<script src="js/version.js?v=0.9.3"></script>
+<link rel="stylesheet" href="css/style.css?v=0.9.1">
+<script src="js/version.js?v=0.9.1"></script>
 <script>
 /* 頁面最早期就攔截，防止瀏覽器把拖放的資料夾當成導航目標 */
 ['dragover','dragenter','drop'].forEach(function(evt) {
@@ -210,13 +210,12 @@
           <h3>座標系統轉換</h3>
           <div class="crs-info">
             <div class="crs-badge-row">
-              <span class="crs-badge unknown" id="crs-from-badge">尚未載入</span>
+              <span class="crs-badge twd67" id="crs-from-badge">TWD67</span>
               <span class="crs-arrow">→</span>
               <span class="crs-badge twd97">TWD97</span>
             </div>
             <p style="font-size:.85rem;color:var(--muted);margin-top:8px">
-              上傳後系統會自動判斷座標系統：TWD97 免轉換，TWD67 自動轉換為 TWD97。
-              若座標落在判斷不確定的範圍，將維持原狀並提示手動確認。
+              KC 地籍資料原始座標為 TWD67/TM2。轉換後可正確套繪現況底圖與 GPS 成果。
               使用內政部公告三參數 Helmert 轉換（ΔX=-752.354, ΔY=-155.968, ΔZ=526.748）。
             </p>
           </div>
@@ -266,7 +265,7 @@
             TWD67 資料請先至「TWD97」頁面轉換。
           </div>
           <div id="basemap-crs-warn" style="display:none;font-size:.82rem;color:var(--yellow);margin-top:4px">
-            ⚠ 座標尚未確認為 TWD97，底圖可能偏移約 800m，建議先至「TWD97」頁面確認 / 轉換
+            ⚠ 目前為 TWD67 座標，底圖偏移約 820m，建議先轉 TWD97
           </div>
         </div>
       </div><!-- /tab-basemap -->
@@ -340,8 +339,8 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="js/gpkg_writer.js?v=0.9.3"></script>
-<script src="js/dxf_writer.js?v=0.9.3"></script>
-<script src="js/app.js?v=0.9.3"></script>
+<script src="js/gpkg_writer.js?v=0.9.1"></script>
+<script src="js/dxf_writer.js?v=0.9.1"></script>
+<script src="js/app.js?v=0.9.1"></script>
 </body>
 </html>

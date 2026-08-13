@@ -1,17 +1,8 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.9.3';
+window.CW_VERSION = '0.9.2';
 window.CW_BUILD   = '2026-05-21';
 
 window.CW_CHANGELOG = [
-  {
-    version: '0.9.3', date: '2026-05-21',
-    notes: [
-      '新增座標系統自動判斷：上傳資料後系統依座標範圍粗略判斷 TWD97／TWD67',
-      'TWD97 資料自動略過轉換；TWD67 資料自動一鍵轉換為 TWD97',
-      '判斷落於重疊模糊區間（多數台灣內陸皆屬此況）時維持原狀，提示手動比對底圖後轉換',
-      'TWD97 分頁徽章新增「不確定」狀態顯示',
-    ],
-  },
   {
     version: '0.9.2', date: '2026-05-21',
     notes: [

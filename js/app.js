@@ -18,32 +18,6 @@ function convertTwd67To97(N, E) {
   return [n97, e97];
 }
 
-// ── 座標系統自動判斷（大略）─────────────────────────────────────────────────
-// TWD67→TWD97 的位移量在全台灣大致固定（≈ΔN 820m／ΔE 255m），
-// 相對台灣本島南北 400km 的跨距而言非常小，因此單純用座標範圍很難 100% 區分。
-// 這裡用「落在哪個系統的合理範圍內」做粗略判斷：
-//   只落在 TWD97 範圍內 → 判定 TWD97（無需轉換）
-//   只落在 TWD67 範圍內 → 判定 TWD67（需轉換）
-//   兩者範圍重疊（多數內陸地區皆屬此況）→ 判斷為不確定，交由使用者確認
-const TWD97_BOUNDS = { minN: 2400000, maxN: 2800000, minE: 140000, maxE: 350000 };
-const TWD67_SHIFT_N = 820;   // TWD97 = TWD67 + shift（大略值）
-const TWD67_SHIFT_E = 255;
-const TWD67_BOUNDS = {
-  minN: TWD97_BOUNDS.minN - TWD67_SHIFT_N, maxN: TWD97_BOUNDS.maxN - TWD67_SHIFT_N,
-  minE: TWD97_BOUNDS.minE - TWD67_SHIFT_E, maxE: TWD97_BOUNDS.maxE - TWD67_SHIFT_E,
-};
-
-function _inBounds(n, e, b) { return n >= b.minN && n <= b.maxN && e >= b.minE && e <= b.maxE; }
-
-/** 回傳 'TWD97' | 'TWD67' | 'ambiguous'，依centroid 座標粗略判斷所屬系統 */
-function guessCoordSystem(centroidN, centroidE) {
-  const in97 = _inBounds(centroidN, centroidE, TWD97_BOUNDS);
-  const in67 = _inBounds(centroidN, centroidE, TWD67_BOUNDS);
-  if (in97 && !in67) return 'TWD97';
-  if (in67 && !in97) return 'TWD67';
-  return 'ambiguous';
-}
-
 // ── 全域狀態 ─────────────────────────────────────────────────────────────────
 const FIT = {
   data:       null,   // parse 結果（segments / ref_pts / boundary_pts / cy / cx）
@@ -964,7 +938,6 @@ function onFitParsed(data) {
   document.getElementById('btn-crs-convert').disabled = false;
   document.getElementById('btn-crs-quick').disabled = false;
   showToast(`解析完成：${data.stats.n_segs} 條線段、${data.stats.n_ref} 個參考點`);
-  autoDetectAndConvertCrs('fit');
   render();
 }
 
@@ -1082,9 +1055,8 @@ document.getElementById('btn-adj-upload').onclick = async () => {
 function onAdjParsed(data) {
   progressHide('adj-progress');
   setBtn('btn-adj-upload', false, '解析並顯示宗地');
-  ADJ.data       = data;
-  ADJ.result     = null;
-  ADJ.crsIsWGS97 = false;
+  ADJ.data   = data;
+  ADJ.result = null;
 
   const allY = [], allX = [];
   for (const p of data.parcels) for (const [y, x] of (p.coords || [])) { allY.push(y); allX.push(x); }
@@ -1104,7 +1076,6 @@ function onAdjParsed(data) {
   document.getElementById('btn-crs-convert').disabled = false;
   document.getElementById('btn-crs-quick').disabled = false;
   showToast(`解析完成：${data.parcels.length} 宗地，其中 ${exceedsCount} 宗超出公差`);
-  autoDetectAndConvertCrs('adj');
   render();
 }
 
@@ -1311,14 +1282,15 @@ function _applyCrsAdj() {
   _finishCrs(sumDn/cnt, sumDe/cnt, cnt);
 }
 
-function _finishCrs(meanDn, meanDe, count, silent) {
+function _finishCrs(meanDn, meanDe, count) {
   const resEl = document.getElementById('crs-result-section');
   document.getElementById('crs-dn').textContent    = (meanDn >= 0 ? '+' : '') + meanDn.toFixed(3) + ' m';
   document.getElementById('crs-de').textContent    = (meanDe >= 0 ? '+' : '') + meanDe.toFixed(3) + ' m';
   document.getElementById('crs-count').textContent = count + ' 點';
   resEl.style.display = '';
 
-  _setCrsBadge('TWD97');
+  const badge = document.getElementById('crs-from-badge');
+  if (badge) { badge.textContent = 'TWD97'; badge.className = 'crs-badge twd97'; }
 
   const quickBtn = document.getElementById('btn-crs-quick');
   if (quickBtn) { quickBtn.disabled = true; quickBtn.title = '已是 TWD97 座標'; }
@@ -1326,63 +1298,12 @@ function _finishCrs(meanDn, meanDe, count, silent) {
   setBtn('btn-crs-convert', false, '🔄 一鍵轉 TWD97');
   updateBasemapCrsWarn();
   resizeCanvas(); initView(); render();
-  if (!silent) showToast('TWD67→TWD97 轉換完成');
+  showToast('TWD67→TWD97 轉換完成');
 }
 
 document.getElementById('btn-crs-convert').onclick = () => {
   startCrsConvert(activeTab === 'adj' ? 'adj' : 'fit');
 };
-
-function _setCrsBadge(state) {
-  // state: 'TWD97' | 'TWD67' | 'ambiguous'
-  const badge = document.getElementById('crs-from-badge');
-  if (!badge) return;
-  if (state === 'TWD97') { badge.textContent = 'TWD97'; badge.className = 'crs-badge twd97'; }
-  else if (state === 'TWD67') { badge.textContent = 'TWD67'; badge.className = 'crs-badge twd67'; }
-  else { badge.textContent = '不確定'; badge.className = 'crs-badge unknown'; }
-}
-
-/** 資料已判斷為 TWD97，直接標記完成，不做任何座標移動 */
-function _markAlreadyTWD97(source) {
-  const store = source === 'adj' ? ADJ : FIT;
-  store.crsIsWGS97 = true;
-  _setCrsBadge('TWD97');
-  const quickBtn = document.getElementById('btn-crs-quick');
-  if (quickBtn) { quickBtn.disabled = true; quickBtn.title = '已是 TWD97 座標'; }
-  setBtn('btn-crs-convert', false, '🔄 一鍵轉 TWD97');
-  updateBasemapCrsWarn();
-}
-
-/** 座標系統無法確定（TWD67/TWD97 皆有可能）：維持現狀，提示使用者自行確認 */
-function _markCrsAmbiguous() {
-  _setCrsBadge('ambiguous');
-  updateBasemapCrsWarn();
-}
-
-// ── 上傳後自動偵測座標系統，依判斷結果自動轉換 / 標記 / 提示 ──────────────────
-function autoDetectAndConvertCrs(source) {
-  const store = source === 'adj' ? ADJ : FIT;
-  let sumN = 0, sumE = 0, cnt = 0;
-
-  if (source === 'adj') {
-    for (const p of store.data.parcels) for (const [y, x] of (p.coords || [])) { sumN += y; sumE += x; cnt++; }
-  } else {
-    for (const p of store.data.ref_pts)      { sumN += p.y; sumE += p.x; cnt++; }
-    for (const p of store.data.boundary_pts) { sumN += p.y; sumE += p.x; cnt++; }
-  }
-  if (!cnt) return;
-
-  const guess = guessCoordSystem(sumN / cnt, sumE / cnt);
-  if (guess === 'TWD67') {
-    if (source === 'adj') _applyCrsAdj(); else _applyCrsFit();
-    showToast('🔍 已自動偵測為 TWD67 座標，已自動轉換為 TWD97');
-  } else if (guess === 'TWD97') {
-    _markAlreadyTWD97(source);
-  } else {
-    _markCrsAmbiguous();
-    showToast('⚠ 無法確定座標系統（TWD67／TWD97 皆有可能），請比對底圖後視需要點擊 🔄 轉換', true);
-  }
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  BASEMAP MODULE
@@ -1390,8 +1311,7 @@ function autoDetectAndConvertCrs(source) {
 function updateBasemapCrsWarn() {
   const warn = document.getElementById('basemap-crs-warn');
   if (!warn) return;
-  const store = activeTab === 'adj' ? ADJ : FIT;
-  warn.style.display = (store.data && !store.crsIsWGS97) ? '' : 'none';
+  warn.style.display = (FIT.data && !FIT.crsIsWGS97) ? '' : 'none';
 }
 
 (function () {
