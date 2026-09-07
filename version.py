@@ -9,7 +9,7 @@ APP_VERSION 變動、建立 tag v{APP_VERSION} 並在同一次執行內建置 ex
 """
 
 APP_TITLE = 'CadastralWorkbench'
-APP_VERSION = '0.9.9'
+APP_VERSION = '0.9.10'
 
 GITHUB_OWNER = 'chenweihanfool'
 GITHUB_REPO = 'cadastral-workbench'
