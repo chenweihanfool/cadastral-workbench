@@ -4,14 +4,13 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  # 手動觸發：透過網頁「Draft a new release → 順便建立新 tag」建立的 tag，
-  # 不會像真正 `git push` 一個 tag 那樣觸發上面的 push/tags 事件，所以那種
-  # 情況下需要手動跑這個 workflow，並在 tag 輸入框填入既有的 tag 名稱
-  # （例如 v0.9.7），才能把 exe 建出來並補上傳到那個既有的 Release。
+    branches: [master]
+    paths:
+      - 'version.py'
   workflow_dispatch:
     inputs:
       tag:
-        description: '要建置並上傳 exe 的既有 tag（例如 v0.9.7）；留空則沿用觸發時的分支，且不會建立/更新 Release 資產'
+        description: '要建置的既有 tag（例如 v0.9.8）；留空則依 version.py 目前版號自動建立/使用對應 tag'
         required: false
         type: string
 
@@ -25,12 +24,46 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      # 建 tag 跟建置放在同一個 workflow、同一次執行裡依序做完，是刻意的
+      # 設計：GitHub 對「用預設 GITHUB_TOKEN push 的東西」有防遞迴機制，
+      # 不會拿去觸發其他 workflow（避免 workflow 互相觸發造成無限迴圈），
+      # 所以如果拆成兩個 workflow（一個負責建 tag、另一個監聽 push:tags
+      # 負責建置），第一個 workflow 建的 tag 永遠叫不動第二個 workflow。
+      # 併成一個 workflow 就不會碰到這個限制。
+      - name: Determine tag to build
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            V=$(python -c "import re; print(re.search(r\"APP_VERSION = '([^']+)'\", open('version.py').read()).group(1))")
+            TAG="v$V"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag exists, then checkout it
+        shell: bash
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG 已存在，直接使用"
+          else
+            git tag -a "$TAG" -m "$TAG"
+            git push origin "$TAG"
+          fi
+          git checkout "$TAG"
 
       - name: Install PyInstaller
         run: pip install pyinstaller
@@ -41,7 +74,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ steps.ver.outputs.tag }}
           files: dist/CadastralWorkbench.exe
           generate_release_notes: true
         env:
