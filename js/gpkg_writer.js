@@ -113,6 +113,27 @@ async function writeGPKG(opts) {
     stmt.free();
   }
 
+  // joined_parcels（接圖模組：多分幅合併地號，含段/小段/面積屬性）
+  if (opts.joined_parcels && opts.joined_parcels.length) {
+    db.run(`CREATE TABLE joined_parcels (
+      fid INTEGER PRIMARY KEY AUTOINCREMENT, geom BLOB,
+      sheet TEXT, sec INTEGER, sub INTEGER, label TEXT,
+      area_reg REAL, area_calc REAL, area_geom REAL)`);
+    db.run(`INSERT INTO gpkg_contents VALUES
+      ('joined_parcels','features','joined_parcels','接圖合併地號',strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+       NULL,NULL,NULL,NULL,3826)`);
+    db.run(`INSERT INTO gpkg_geometry_columns VALUES
+      ('joined_parcels','geom','POLYGON',3826,0,0)`);
+    const stmt = db.prepare(
+      'INSERT INTO joined_parcels (geom,sheet,sec,sub,label,area_reg,area_calc,area_geom) VALUES (?,?,?,?,?,?,?,?)');
+    for (const p of opts.joined_parcels) {
+      if (!p.coords || p.coords.length < 3) continue;
+      stmt.run([_wkbPolygon(p.coords), p.sheet, p.sec, p.sub, p.label,
+        p.area_reg == null ? null : p.area_reg, p.area_calc, p.area_geom]);
+    }
+    stmt.free();
+  }
+
   _downloadDb(db, opts.filename || 'output.gpkg');
   db.close();
 }

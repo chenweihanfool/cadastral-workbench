@@ -38,6 +38,12 @@ const ADJ = {
   crsIsWGS97: false,  // true after TWD67→TWD97 conversion
 };
 
+const JOIN = {
+  data:    null,   // parse 結果（sheets / parcels / seam_report / stats）
+  sheets:  {},     // { sheetId: {COA:File, BNP:File, PAR:File} }
+  layers:  { parcels: true, bbox: true, seam: true },
+};
+
 const MANUAL = {
   active:     false,
   step:       0.01,        // metres per arrow-key press (default 1 cm)
@@ -285,6 +291,8 @@ function render() {
 
   if (activeTab === 'fit' || activeTab === 'crs' || activeTab === 'basemap') {
     renderFit(W, H);
+  } else if (activeTab === 'join') {
+    renderJoin(W, H);
   } else {
     renderAdj(W, H);
   }
@@ -296,7 +304,7 @@ function updateStatusBar() {
   const zoomEl  = document.getElementById('status-zoom');
   const modEl   = document.getElementById('status-module');
   if (zoomEl) zoomEl.textContent = '×' + view.scale.toFixed(2);
-  const modNames = { fit: '套圖', adj: '調整', crs: 'TWD97', basemap: '底圖' };
+  const modNames = { fit: '套圖', adj: '調整', join: '接圖', crs: 'TWD97', basemap: '底圖' };
   if (modEl) modEl.textContent = modNames[activeTab] || activeTab;
 }
 
@@ -512,6 +520,67 @@ function renderAdj(W, H) {
       }
     }
   }
+}
+
+// ── 依分幅代號決定顏色（固定色盤，同一分幅每次都同色）───────────────────────
+const _SHEET_PALETTE = ['#7aa2ff','#7ae0c4','#ffd27a','#ff9f7a','#c99bff','#7affea','#ffb3d1','#b3ff9b','#9bd1ff','#ffe08a'];
+const _sheetColorCache = {};
+function sheetColor(sheetId) {
+  if (_sheetColorCache[sheetId]) return _sheetColorCache[sheetId];
+  let h = 0;
+  for (let i = 0; i < sheetId.length; i++) h = (h * 31 + sheetId.charCodeAt(i)) >>> 0;
+  const col = _SHEET_PALETTE[h % _SHEET_PALETTE.length];
+  _sheetColorCache[sheetId] = col;
+  return col;
+}
+
+function renderJoin(W, H) {
+  if (!JOIN.data) {
+    drawPlaceholder(W, H, '請上傳多分幅地籍資料夾', 'COA · BNP · PAR（每個子資料夾一個分幅）');
+    return;
+  }
+
+  if (JOIN.layers.bbox) {
+    ctx.setLineDash([6, 4]);
+    for (const s of JOIN.data.sheets) {
+      if (!s.bbox) continue;
+      const [minY, minX, maxY, maxX] = s.bbox;
+      const [sx1, sy1] = worldToScreen(maxY, minX);
+      const [sx2, sy2] = worldToScreen(minY, maxX);
+      ctx.strokeStyle = 'rgba(245,197,66,.6)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx1, sy1, sx2 - sx1, sy2 - sy1);
+      const labelFs = scaledFontSize(0.6, sx1, sy1, 8, 16);
+      ctx.font = `${labelFs}px Consolas`;
+      ctx.fillStyle = 'rgba(245,197,66,.9)';
+      ctx.textAlign = 'left';
+      ctx.fillText(s.id, sx1 + 3, sy1 + labelFs + 2);
+    }
+    ctx.setLineDash([]);
+  }
+
+  if (JOIN.layers.parcels) {
+    for (const p of JOIN.data.parcels) {
+      if (!p.coords || p.coords.length < 3) continue;
+      drawPolygon(p.coords, _hexToRgba(sheetColor(p.sheet), 0.85), 1, false);
+    }
+  }
+
+  if (JOIN.layers.seam && JOIN.data.seam_report) {
+    for (const m of JOIN.data.seam_report.worst) {
+      if (m.diff_m < 0.05) continue;
+      const [sx, sy] = worldToScreen(m.y_a, m.x_a);
+      ctx.beginPath();
+      ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(240,82,82,.85)';
+      ctx.fill();
+    }
+  }
+}
+
+function _hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function drawPolygon(coords, strokeColor, lineWidth, fill = true) {
@@ -808,6 +877,7 @@ worker.onmessage = (e) => {
       pyodideReady = true;
       document.getElementById('btn-upload').disabled    = !canUploadFit();
       document.getElementById('btn-adj-upload').disabled = !canUploadAdj();
+      document.getElementById('btn-join-upload').disabled = !canUploadJoin();
       break;
     case 'fit_parse_result':
       onFitParsed(payload);
@@ -821,15 +891,20 @@ worker.onmessage = (e) => {
     case 'adj_run_result':
       onAdjResult(payload);
       break;
+    case 'join_parse_result':
+      onJoinParsed(payload);
+      break;
     // crs_result no longer used — conversion done directly via proj4.js
     case 'error':
       showToast('錯誤：' + payload, true);
       progressHide('fit-progress');
       progressHide('adj-progress');
       progressHide('crs-progress');
+      progressHide('join-progress');
       setBtn('btn-fit',        false, '▶ 執行套疊');
       setBtn('btn-adj-run',    false, '▶ 執行調整');
       setBtn('btn-crs-convert', false, '🔄 一鍵轉 TWD97');
+      setBtn('btn-join-upload', false, '解析並合併');
       break;
   }
 };
@@ -1206,6 +1281,230 @@ document.getElementById('btn-adj-gpkg').onclick = async () => {
   await writeAdjGPKG(ADJ.result);
   showToast('GeoPackage 已下載');
 };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  JOIN MODULE — 接圖（多分幅 COA/BNP/PAR 合併）
+// ═══════════════════════════════════════════════════════════════════════════════
+const JOIN_EXTS = ['COA', 'BNP', 'PAR'];
+const joinDropZone  = document.getElementById('join-drop-zone');
+const joinFileInput = document.getElementById('join-file-input');
+
+// 依檔案相對路徑分組：上層資料夾/分幅子資料夾/檔案，分幅代號＝該檔案的直接父資料夾名稱
+function groupJoinFiles(files) {
+  for (const f of files) {
+    const ext = f.name.split('.').pop().toUpperCase();
+    if (!JOIN_EXTS.includes(ext)) continue;
+    const relPath = f.webkitRelativePath || f._joinRelPath || '';
+    const parts = relPath.split('/').filter(Boolean);
+    if (parts.length < 2) continue; // 沒有子資料夾層級，無法判斷屬於哪個分幅
+    const sheetId = parts[parts.length - 2];
+    if (!JOIN.sheets[sheetId]) JOIN.sheets[sheetId] = {};
+    JOIN.sheets[sheetId][ext] = f;
+  }
+  updateJoinSheetList();
+  document.getElementById('btn-join-upload').disabled = !canUploadJoin();
+}
+
+async function processEntriesWithPath(entries, extensions) {
+  const extSet  = new Set(extensions.map(e => e.toUpperCase()));
+  const results = [];
+  async function walk(entry) {
+    if (entry.isFile) {
+      const ext = entry.name.split('.').pop().toUpperCase();
+      if (extSet.has(ext)) {
+        const file = await new Promise((res, rej) => entry.file(res, rej));
+        file._joinRelPath = entry.fullPath.replace(/^\//, '');
+        results.push(file);
+      }
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      let batch;
+      do {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        for (const child of batch) await walk(child);
+      } while (batch.length > 0);
+    }
+  }
+  for (const entry of entries) await walk(entry);
+  return results;
+}
+
+joinFileInput.onchange = e => groupJoinFiles([...e.target.files]);
+
+let _joinDragDepth = 0;
+joinDropZone.addEventListener('dragenter', e => { e.preventDefault(); _joinDragDepth++; joinDropZone.classList.add('over'); });
+joinDropZone.addEventListener('dragover',  e => { e.preventDefault(); });
+joinDropZone.addEventListener('dragleave', () => { if (--_joinDragDepth <= 0) { _joinDragDepth = 0; joinDropZone.classList.remove('over'); } });
+joinDropZone.addEventListener('drop', async e => {
+  e.preventDefault();
+  e.stopPropagation();
+  _joinDragDepth = 0;
+  joinDropZone.classList.remove('over');
+  const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length) { showToast('瀏覽器不支援資料夾拖放，請改用點擊選取', true); return; }
+  const files = await processEntriesWithPath(entries, JOIN_EXTS);
+  groupJoinFiles(files);
+});
+
+function canUploadJoin() {
+  if (!pyodideReady) return false;
+  return Object.values(JOIN.sheets).some(s => s.COA && s.BNP);
+}
+
+function updateJoinSheetList() {
+  const list = document.getElementById('join-sheet-list');
+  const ids = Object.keys(JOIN.sheets).sort();
+  if (!ids.length) { list.innerHTML = ''; return; }
+  list.innerHTML = ids.map(id => {
+    const s = JOIN.sheets[id];
+    const ok = !!(s.COA && s.BNP);
+    const parts = JOIN_EXTS.map(ext => `<span style="color:${s[ext] ? 'var(--green)' : 'var(--muted)'};margin-right:6px">${ext}${s[ext] ? '✓' : ''}</span>`).join('');
+    return `<div class="file-badge"><div class="dot ${ok ? 'ok' : ''}"></div><span>${id}</span><span style="margin-left:auto;font-size:.72rem">${parts}</span></div>`;
+  }).join('');
+}
+
+document.getElementById('btn-join-upload').onclick = async () => {
+  if (!canUploadJoin()) return;
+  setBtn('btn-join-upload', true, '解析中…');
+  progressShow('join-progress');
+  try {
+    const sheetIds = Object.keys(JOIN.sheets).filter(id => JOIN.sheets[id].COA && JOIN.sheets[id].BNP).sort();
+    const skipped  = Object.keys(JOIN.sheets).length - sheetIds.length;
+    if (skipped > 0) showToast(`${skipped} 個分幅缺少 COA/BNP，已略過`, true);
+    const sheets = [];
+    const transfers = [];
+    for (const id of sheetIds) {
+      const s = JOIN.sheets[id];
+      const coa = await s.COA.arrayBuffer();
+      const bnp = await s.BNP.arrayBuffer();
+      const par = s.PAR ? await s.PAR.arrayBuffer() : null;
+      sheets.push({ id, coa, bnp, par });
+      transfers.push(coa, bnp);
+      if (par) transfers.push(par);
+    }
+    worker.postMessage({ type: 'join_parse', payload: { sheets } }, transfers);
+  } catch (err) {
+    showToast('讀取失敗：' + err.message, true);
+    setBtn('btn-join-upload', false, '解析並合併');
+    progressHide('join-progress');
+  }
+};
+
+function onJoinParsed(data) {
+  progressHide('join-progress');
+  setBtn('btn-join-upload', false, '解析並合併');
+  JOIN.data = data;
+
+  const allY = [], allX = [];
+  for (const p of data.parcels) for (const [y, x] of (p.coords || [])) { allY.push(y); allX.push(x); }
+  if (!allY.length) { showToast('未解析到任何地號幾何', true); return; }
+  const pad = (Math.max(...allY) - Math.min(...allY)) * 0.03;
+  extents = {
+    minY: Math.min(...allY) - pad, maxY: Math.max(...allY) + pad,
+    minX: Math.min(...allX) - pad, maxX: Math.max(...allX) + pad,
+  };
+  resizeCanvas(); initView();
+
+  el('join-stat-sheets').textContent  = data.stats.n_sheets;
+  el('join-stat-parcels').textContent = data.stats.n_parcels;
+  el('join-stat-points').textContent  = data.stats.n_points;
+  document.getElementById('join-stats-section').style.display = '';
+
+  renderJoinSeamReport(data.seam_report);
+  document.getElementById('join-seam-section').style.display = '';
+  document.getElementById('btn-join-gpkg').style.display    = '';
+  document.getElementById('btn-join-geojson').style.display = '';
+
+  if (data.warnings && data.warnings.length) {
+    showToast(data.warnings.join('；'), true);
+  }
+  showToast(`合併完成：${data.stats.n_sheets} 個分幅、${data.stats.n_parcels} 筆地號`);
+  render();
+}
+
+function renderJoinSeamReport(seam) {
+  const bins = seam.bins || {};
+  const binsEl = document.getElementById('join-seam-bins');
+  const binLabels = { exact: '完全重合', le_5cm: '≤5cm', le_10cm: '5-10cm', le_30cm: '10-30cm', le_50cm: '30-50cm' };
+  binsEl.innerHTML = Object.entries(binLabels).map(([k, label]) => {
+    const isBad = k !== 'exact' && k !== 'le_5cm' && (bins[k] || 0) > 0;
+    return `<div class="stat-box"><div class="label">${label}</div><div class="value" style="${isBad ? 'color:var(--red)' : ''}">${bins[k] || 0}</div></div>`;
+  }).join('');
+
+  const listEl = document.getElementById('join-seam-list');
+  const worst = (seam.worst || []).filter(m => m.diff_m >= 0.05);
+  if (!worst.length) {
+    listEl.innerHTML = '<div style="color:var(--green)">未發現超過 5 cm 的共邊座標微差</div>';
+    return;
+  }
+  listEl.innerHTML = worst.slice(0, 30).map(m => `
+    <div style="border-bottom:1px solid #1e2030;padding:3px 0;cursor:pointer" class="join-seam-row" data-y="${m.y_a}" data-x="${m.x_a}">
+      <b style="color:var(--red)">${m.diff_m.toFixed(3)} m</b> —
+      ${m.sheet_a}#${m.pt_a} ↔ ${m.sheet_b}#${m.pt_b}
+    </div>`).join('');
+  listEl.querySelectorAll('.join-seam-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const y = parseFloat(row.dataset.y), x = parseFloat(row.dataset.x);
+      if (!extents) return;
+      const span = 20; // 公尺
+      extents = { minY: y - span, maxY: y + span, minX: x - span, maxX: x + span };
+      resizeCanvas(); initView(); render();
+    });
+  });
+}
+
+['join-layer-parcels', 'join-layer-bbox', 'join-layer-seam'].forEach(id => {
+  const key = id.replace('join-layer-', '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  document.getElementById(id).addEventListener('change', e => {
+    JOIN.layers[key] = e.target.checked;
+    render();
+  });
+});
+
+document.getElementById('btn-join-gpkg').onclick = async () => {
+  if (!JOIN.data) return;
+  showToast('產生 GeoPackage…');
+  await writeJoinGPKG(JOIN.data);
+  showToast('GeoPackage 已下載');
+};
+
+document.getElementById('btn-join-geojson').onclick = () => {
+  if (!JOIN.data) return;
+  const features = JOIN.data.parcels.map(p => ({
+    type: 'Feature',
+    properties: {
+      sheet: p.sheet, sec: p.sec, sub: p.sub, label: p.label,
+      area_reg: p.area_reg, area_calc: p.area_calc, area_geom: p.area_geom,
+    },
+    geometry: {
+      type: 'Polygon',
+      coordinates: [[...p.coords.map(([y, x]) => [x, y]), [p.coords[0][1], p.coords[0][0]]]],
+    },
+  }));
+  const geojson = {
+    type: 'FeatureCollection',
+    crs: { type: 'name', properties: { name: 'urn:ogc:def:crs:EPSG::3826' } },
+    features,
+  };
+  const blob = new Blob([JSON.stringify(geojson)], { type: 'application/geo+json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'joined_cadastral.geojson'; a.click();
+  showToast('GeoJSON 已下載');
+};
+
+async function writeJoinGPKG(data) {
+  if (typeof writeGPKG !== 'function') { showToast('GeoPackage 模組未載入', true); return; }
+  await writeGPKG({
+    filename: 'joined_cadastral.gpkg',
+    joined_parcels: data.parcels,
+    metadata: {
+      n_sheets: data.stats.n_sheets,
+      n_parcels: data.stats.n_parcels,
+      n_points: data.stats.n_points,
+      seam_matched_pairs: data.seam_report?.n_matched_pairs || 0,
+    },
+  });
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  CRS MODULE (TWD67 → TWD97)  ── 直接用 proj4.js，不走 Pyodide worker
