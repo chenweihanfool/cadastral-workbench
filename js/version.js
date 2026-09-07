@@ -1,8 +1,15 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.9.7';
+window.CW_VERSION = '0.9.8';
 window.CW_BUILD   = '2026-09-07';
 
 window.CW_CHANGELOG = [
+  {
+    version: '0.9.8', date: '2026-09-07',
+    notes: [
+      '修正接圖模組匯出 COA/BNP/PAR 的 BNP 欄寬錯誤：先前版本在段/小段/序號/總點數與各界址點之間多加了空白分隔，跟地政/CAD 軟體用固定欄寬讀取的方式對不起來，開啟後界址線會連成一堆放射狀亂線',
+      '改用從實際資料回推驗證出的正確欄寬（段4+小段4+序號3+總點數6，界址點每格固定6碼緊貼），並同步修正解析邏輯',
+    ],
+  },
   {
     version: '0.9.7', date: '2026-09-07',
     notes: [
