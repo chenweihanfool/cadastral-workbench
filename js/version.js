@@ -1,8 +1,15 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.9.8';
+window.CW_VERSION = '0.9.9';
 window.CW_BUILD   = '2026-09-07';
 
 window.CW_CHANGELOG = [
+  {
+    version: '0.9.9', date: '2026-09-07',
+    notes: [
+      '修正接圖模組匯出 BNP 檔頭（第一行）的欄寬：先前版本在檔名與筆數欄位間多加了一個空白，跟資料列一樣的問題——地政軟體若靠這個檔頭讀出的筆數決定要讀幾行，欄位一位移就會整段界址線被判斷成 0 筆，只剩 COA 的點位看得到',
+      '改用檔名(6碼)+筆數(5碼)緊貼、不加分隔的格式，COA/BNP/PAR 三個檔頭一併修正',
+    ],
+  },
   {
     version: '0.9.8', date: '2026-09-07',
     notes: [

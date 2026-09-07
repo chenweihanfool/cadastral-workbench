@@ -364,9 +364,13 @@ elif join_mode == 'export':  # noqa: F821
                 )
                 n_parcels_out += 1
 
-        coa_text = '\r\n'.join([f'JOIN01  {n_points:5d}  500  {n_points:5d}'] + coa_lines) + '\r\n'
-        bnp_text = '\r\n'.join([f'JOIN01 {len(bnp_lines):5d}'] + bnp_lines) + '\r\n'
-        par_text = '\r\n'.join([f'JOIN01 {n_parcels_out:4d}  0 0 09006'] + par_lines) + '\r\n'
+        # 檔頭一律緊貼（檔名6碼＋筆數5碼，中間不加分隔空白），比照原始檔案
+        # 的排版——BNP 的檔頭筆數看起來會被地政軟體拿來當「接下來要讀幾
+        # 行」的依據，欄位一旦位移，讀到的筆數就會跟本文兜不起來，實測
+        # 曾經因此整段界址線被判斷成 0 筆、只剩 COA 的點位看得到。
+        coa_text = '\r\n'.join([f'JOIN01{n_points:5d}  500  {n_points:5d}'] + coa_lines) + '\r\n'
+        bnp_text = '\r\n'.join([f'JOIN01{len(bnp_lines):5d}'] + bnp_lines) + '\r\n'
+        par_text = '\r\n'.join([f'JOIN01{n_parcels_out:5d}  0 0 09006'] + par_lines) + '\r\n'
 
         result_json = json.dumps({  # noqa: F841
             'mode': 'export',
