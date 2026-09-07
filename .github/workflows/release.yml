@@ -4,7 +4,16 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # 手動觸發：透過網頁「Draft a new release → 順便建立新 tag」建立的 tag，
+  # 不會像真正 `git push` 一個 tag 那樣觸發上面的 push/tags 事件，所以那種
+  # 情況下需要手動跑這個 workflow，並在 tag 輸入框填入既有的 tag 名稱
+  # （例如 v0.9.7），才能把 exe 建出來並補上傳到那個既有的 Release。
   workflow_dispatch:
+    inputs:
+      tag:
+        description: '要建置並上傳 exe 的既有 tag（例如 v0.9.7）；留空則沿用觸發時的分支，且不會建立/更新 Release 資產'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -15,6 +24,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -30,6 +41,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: dist/CadastralWorkbench.exe
           generate_release_notes: true
         env:
