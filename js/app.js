@@ -894,6 +894,9 @@ worker.onmessage = (e) => {
     case 'join_parse_result':
       onJoinParsed(payload);
       break;
+    case 'join_export_result':
+      onJoinExportResult(payload);
+      break;
     // crs_result no longer used — conversion done directly via proj4.js
     case 'error':
       showToast('錯誤：' + payload, true);
@@ -905,6 +908,7 @@ worker.onmessage = (e) => {
       setBtn('btn-adj-run',    false, '▶ 執行調整');
       setBtn('btn-crs-convert', false, '🔄 一鍵轉 TWD97');
       setBtn('btn-join-upload', false, '解析並合併');
+      setBtn('btn-join-kc', false, '⬇ 匯出 COA/BNP/PAR');
       break;
   }
 };
@@ -1414,6 +1418,8 @@ function onJoinParsed(data) {
   document.getElementById('join-seam-section').style.display = '';
   document.getElementById('btn-join-gpkg').style.display    = '';
   document.getElementById('btn-join-geojson').style.display = '';
+  document.getElementById('btn-join-kc').style.display      = '';
+  document.getElementById('join-renumber-note').style.display = 'none';
 
   if (data.warnings && data.warnings.length) {
     showToast(data.warnings.join('；'), true);
@@ -1491,6 +1497,38 @@ document.getElementById('btn-join-geojson').onclick = () => {
   a.href = URL.createObjectURL(blob); a.download = 'joined_cadastral.geojson'; a.click();
   showToast('GeoJSON 已下載');
 };
+
+document.getElementById('btn-join-kc').onclick = () => {
+  if (!JOIN.data) return;
+  setBtn('btn-join-kc', true, '產生中…');
+  worker.postMessage({ type: 'join_export' });
+};
+
+function onJoinExportResult(result) {
+  setBtn('btn-join-kc', false, '⬇ 匯出 COA/BNP/PAR');
+  if (result.error) { showToast(result.error, true); return; }
+
+  const dl = (text, filename) => {
+    const blob = new Blob([new TextEncoder().encode(text)], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  };
+  dl(result.coa_text, 'JOINED.COA');
+  dl(result.bnp_text, 'JOINED.BNP');
+  dl(result.par_text, 'JOINED.PAR');
+
+  const noteEl = document.getElementById('join-renumber-note');
+  if (result.renumbered && result.renumbered.length) {
+    const sample = result.renumbered.slice(0, 8)
+      .map(r => `${r.sheet} (${r.old_sec}-${r.old_sub}) → (${r.new_sec}-${r.new_sub})`).join('<br>');
+    const more = result.renumbered.length > 8 ? `<br>…等共 ${result.renumbered.length} 筆` : '';
+    noteEl.innerHTML = `⚠ ${result.renumbered.length} 筆地號因跨分幅段/小段撞號已調整編號：<br>${sample}${more}`;
+    noteEl.style.display = '';
+  } else {
+    noteEl.style.display = 'none';
+  }
+  showToast(`已下載合併後 COA/BNP/PAR（${result.stats.n_points} 點、${result.stats.n_parcels} 宗地）`);
+}
 
 async function writeJoinGPKG(data) {
   if (typeof writeGPKG !== 'function') { showToast('GeoPackage 模組未載入', true); return; }

@@ -137,6 +137,15 @@ self.onmessage = async (e) => {
         break;
       }
 
+      // ── JOIN: 匯出合併後的 COA/BNP/PAR（沿用 join_parse 留下的 Python 全域）──
+      case 'join_export': {
+        pyodide.globals.set('join_mode', 'export');
+        pyodide.runPython(joinScript);
+        const result = JSON.parse(pyodide.globals.get('result_json'));
+        self.postMessage({ type: 'join_export_result', payload: result });
+        break;
+      }
+
       default:
         self.postMessage({ type: 'error', payload: '未知訊息類型：' + type });
     }

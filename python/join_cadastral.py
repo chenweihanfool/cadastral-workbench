@@ -18,6 +18,17 @@ parse 模式 (join_mode == 'parse')：
   以及每個分幅 i 對應的 sheet_{i}_coa / sheet_{i}_bnp / sheet_{i}_par
   （Uint8Array，Big5 編碼文字檔）。
   → 解析全部分幅、合併地號多邊形、偵測跨分幅共邊點座標微差，輸出 result_json
+  → 解析結果（sheets 清單）留在 Python 全域，供 export 模式沿用
+
+export 模式 (join_mode == 'export')：
+  沿用 parse 模式留下的全域 `sheets`（須先呼叫過一次 parse）。
+  → 把所有分幅合併模擬成單一分幅的 COA/BNP/PAR 文字檔：
+    - COA 點號全域重新編號（1..N，依分幅順序）
+    - BNP/PAR 的 (段,小段) 盡量保留原值；因為這組鍵只在單一分幅內唯一，
+      跨分幅撞號時把小段欄位加上 1000×分幅序號（使用者指定的錯開方式）
+      以避免合併後同一把鍵對到兩筆不同地號，並在 renumbered 列出所有被
+      調整過的地號供使用者核對
+  → 輸出 result_json：coa_text / bnp_text / par_text / renumbered / stats
 """
 
 import json
@@ -241,3 +252,107 @@ if join_mode == 'parse':  # noqa: F821
             'n_points': len(all_pts),
         },
     })
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  EXPORT MODE（sheets 沿用 parse 模式留下的全域）
+# ═══════════════════════════════════════════════════════════════════════════
+elif join_mode == 'export':  # noqa: F821
+    if 'sheets' not in globals() or not sheets:  # noqa: F821
+        result_json = json.dumps({'mode': 'export', 'error': '尚未解析任何分幅，請先執行接圖'})  # noqa: F841
+    else:
+        SUB_OFFSET = 1000  # 撞號時：新小段 = 原小段 + SUB_OFFSET × 分幅序號
+
+        # ── COA：點號全域重新編號 ────────────────────────────────────────────
+        new_pid = {}   # (sheet_idx, old_pid) -> new_pid
+        coa_lines = []
+        next_pid = 1
+        for si, sheet in enumerate(sheets):  # noqa: F821
+            for old_pid in sorted(sheet['coa'].keys()):
+                y, x = sheet['coa'][old_pid]
+                new_pid[(si, old_pid)] = next_pid
+                coa_lines.append(f'{next_pid:5d} {y:16.8f}{x:15.8f} ')
+                next_pid += 1
+        n_points = next_pid - 1
+
+        # ── BNP + PAR：(段,小段) 撞號錯開，重建拓樸與屬性 ───────────────────
+        # 撞號時的新小段 = 原小段 + SUB_OFFSET × 第幾次撞號（1,2,3…），而非
+        # ×分幅序號 —— 因為 PAR 是固定欄寬格式（段/小段各佔 4 碼，
+        # 0-9999），offset 若直接乘上分幅序號，分幅數一多（例如第 11 個分
+        # 幅、序號 10）就會讓小段變成 5 碼、撐爆固定欄位、把後面的面積等
+        # 欄位全部擠位。改用「同一把鍵第幾次撞號」計數，同一把鍵實際撞號
+        # 次數通常只有 2-4 次（本例最多 4 次），offset 遠小於欄寬上限，
+        # 語意上一樣是「加上一個好辨識的大偏移量」，但保證不會爆欄。
+        used_keys = set()
+        key_seen = defaultdict(int)   # 原始 (段,小段) → 已出現次數
+        renumbered = []
+        bnp_lines = []
+        par_lines = []
+        n_parcels_out = 0
+        CHUNK = 11  # 每行界址點數，比照原始檔案的視覺寬度
+
+        for si, sheet in enumerate(sheets):  # noqa: F821
+            for (sec, sub), idxs in sheet['bnp'].items():
+                valid_idxs = [i for i in idxs if i in sheet['coa']]
+                if len(valid_idxs) < 3:
+                    continue
+
+                occurrence = key_seen[(sec, sub)]
+                key_seen[(sec, sub)] += 1
+                new_sec, new_sub = sec, sub
+                if occurrence > 0:
+                    bump = occurrence
+                    new_sub = sub + SUB_OFFSET * bump
+                    while new_sub > 9999 or (new_sec, new_sub) in used_keys:
+                        bump += 1
+                        new_sub = sub + SUB_OFFSET * bump
+                        if bump > 9000:   # 理論上不會發生的保底防呆
+                            new_sub = sub
+                            break
+                    renumbered.append({
+                        'sheet': sheet['id'], 'old_sec': sec, 'old_sub': sub,
+                        'new_sec': new_sec, 'new_sub': new_sub,
+                    })
+                used_keys.add((new_sec, new_sub))
+
+                new_idxs = [new_pid[(si, i)] for i in valid_idxs]
+                total = len(new_idxs)
+                for seq, start in enumerate(range(0, total, CHUNK), start=1):
+                    chunk = new_idxs[start:start + CHUNK]
+                    vals = ' '.join(f'{v:5d}' for v in chunk)
+                    # 段/小段/序號/總數之間一律留白，避免數值較大時彼此頂到
+                    # 沒有空白可分——BNP 用正規式逐一擷取數字，這樣才不會
+                    # 把兩個相鄰欄位誤讀成同一個數字。
+                    bnp_lines.append(f'{new_sec:4d} {new_sub:4d} {seq:4d} {total:4d}  {vals}')
+
+                ring = [sheet['coa'][i] for i in valid_idxs]
+                area_geom = _shoelace_area(ring)
+                cyy, cxx = _centroid(ring)
+                par_rec = sheet['par'].get((sec, sub))
+                area_reg  = par_rec['area_reg']  if par_rec else area_geom
+                area_calc = par_rec['area_calc'] if par_rec else area_geom
+                # PAR 沿用原始固定欄寬（段4碼＋小段4碼緊接、無分隔），因為
+                # _parse_par 是用固定欄位切字串讀取；new_sub 已保證 ≤9999
+                # 所以不會撐爆這個欄寬。
+                par_lines.append(
+                    f'{new_sec:4d}{new_sub:4d} 336{area_reg:10.2f}'
+                    f'{new_sec:4d}{new_sub:4d}{area_calc:10.2f} '
+                    f'{cyy:14.4f} {cxx:13.4f}  0'
+                )
+                n_parcels_out += 1
+
+        coa_text = '\r\n'.join([f'JOIN01  {n_points:5d}  500  {n_points:5d}'] + coa_lines) + '\r\n'
+        bnp_text = '\r\n'.join([f'JOIN01 {len(bnp_lines):5d}'] + bnp_lines) + '\r\n'
+        par_text = '\r\n'.join([f'JOIN01 {n_parcels_out:4d}  0 0 09006'] + par_lines) + '\r\n'
+
+        result_json = json.dumps({  # noqa: F841
+            'mode': 'export',
+            'coa_text': coa_text,
+            'bnp_text': bnp_text,
+            'par_text': par_text,
+            'renumbered': renumbered,
+            'stats': {
+                'n_points': n_points,
+                'n_parcels': n_parcels_out,
+                'n_renumbered': len(renumbered),
+            },
+        })
