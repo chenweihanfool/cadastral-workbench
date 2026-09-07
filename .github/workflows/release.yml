@@ -46,7 +46,7 @@ jobs:
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG="${{ github.ref_name }}"
           else
-            V=$(python -c "import re; print(re.search(r\"APP_VERSION = '([^']+)'\", open('version.py').read()).group(1))")
+            V=$(python -c "import re; print(re.search(r\"APP_VERSION = '([^']+)'\", open('version.py', encoding='utf-8').read()).group(1))")
             TAG="v$V"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
