@@ -32,6 +32,7 @@
   <!-- Module tabs (left) -->
   <button class="tb-btn active" data-tab="fit">📐 套圖</button>
   <button class="tb-btn"        data-tab="adj">📏 調整</button>
+  <button class="tb-btn"        data-tab="join">🧩 接圖</button>
 
   <div class="tb-sep"></div>
 
@@ -204,6 +205,68 @@
         </div>
 
       </div><!-- /tab-adj -->
+
+      <!-- ══════════════════ 接圖分頁 ══════════════════ -->
+      <div id="tab-join" class="tab-panel">
+
+        <!-- 上傳 -->
+        <div class="section">
+          <h3>上傳多分幅地籍資料</h3>
+          <div style="font-size:.85rem;color:var(--muted);margin-bottom:6px">
+            拖放包含多個分幅子資料夾的上層資料夾，每個子資料夾各自含一組 COA/BNP/PAR
+          </div>
+          <label id="join-drop-zone" for="join-file-input">
+            <div class="icon">🧩</div>
+            拖放上層資料夾，或點擊選取<br>
+            <span style="font-size:.85rem;color:var(--muted)">每個子資料夾＝一個分幅（COA · BNP · PAR）</span>
+          </label>
+          <input id="join-file-input" type="file" webkitdirectory directory multiple style="position:fixed;top:-200px;left:-200px;opacity:0;width:1px;height:1px">
+          <div id="join-sheet-list" style="margin-top:8px;max-height:180px;overflow-y:auto;padding-right:4px"></div>
+          <div class="progress-wrap" id="join-progress"><div class="progress-bar"></div></div>
+          <button id="btn-join-upload" class="btn btn-primary" style="margin-top:8px" disabled>解析並合併</button>
+        </div>
+
+        <!-- 統計 -->
+        <div id="join-stats-section" class="section" style="display:none">
+          <h3>合併統計</h3>
+          <div class="stat-grid">
+            <div class="stat-box"><div class="label">分幅數</div><div class="value" id="join-stat-sheets">—</div></div>
+            <div class="stat-box"><div class="label">地號數</div><div class="value" id="join-stat-parcels">—</div></div>
+            <div class="stat-box" style="grid-column:span 2"><div class="label">界址點數</div><div class="value" id="join-stat-points">—</div></div>
+          </div>
+          <button id="btn-join-gpkg" class="btn btn-green" style="margin-top:8px;display:none">📦 匯出 GeoPackage</button>
+          <button id="btn-join-geojson" class="btn btn-secondary" style="margin-top:8px;display:none">⬇ 匯出 GeoJSON</button>
+          <button id="btn-join-kc" class="btn btn-secondary" style="margin-top:8px;display:none">⬇ 匯出 COA/BNP/PAR</button>
+          <div id="join-renumber-note" style="display:none;font-size:.78rem;color:var(--muted);margin-top:6px;line-height:1.6"></div>
+        </div>
+
+        <!-- 接縫品質報告 -->
+        <div id="join-seam-section" class="section" style="display:none">
+          <h3>共邊座標品質報告</h3>
+          <div style="font-size:.82rem;color:var(--muted);margin-bottom:6px">
+            偵測不同分幅間相距 0.5 m 內的界址點，可能為同一真實界址點的重複數化
+          </div>
+          <div id="join-seam-bins" class="stat-grid" style="margin-bottom:8px"></div>
+          <div id="join-seam-list" style="font-size:.82rem;line-height:1.7;max-height:200px;overflow-y:auto"></div>
+        </div>
+
+        <!-- 圖層 -->
+        <div class="section">
+          <h3>圖層顯示</h3>
+          <div class="toggle-row"><span>地號界線</span><label class="toggle"><input id="join-layer-parcels" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>分幅範圍框</span><label class="toggle"><input id="join-layer-bbox" type="checkbox" checked><span class="slider"></span></label></div>
+          <div class="toggle-row"><span>共邊微差標記</span><label class="toggle"><input id="join-layer-seam" type="checkbox" checked><span class="slider"></span></label></div>
+        </div>
+
+        <!-- 圖例 -->
+        <div class="section">
+          <h3>圖例</h3>
+          <div class="legend-item"><div class="legend-line" style="background:rgba(150,180,255,.8)"></div><span>地號界線（依分幅上色）</span></div>
+          <div class="legend-item"><div class="legend-line" style="background:#f5c542;border:1px dashed #f5c542"></div><span>分幅範圍框</span></div>
+          <div class="legend-item"><div class="legend-circle" style="background:#f05252"></div><span>共邊座標微差 &gt;5 cm</span></div>
+        </div>
+
+      </div><!-- /tab-join -->
 
       <!-- ══════════════════ TWD97 分頁 ══════════════════ -->
       <div id="tab-crs" class="tab-panel">

@@ -1,10 +1,11 @@
 /* ── Pyodide Worker ──────────────────────────────────────────────────────── */
 importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js');
 
-let pyodide   = null;
-let fitScript = null;
-let adjScript = null;
-let crsScript = null;
+let pyodide    = null;
+let fitScript  = null;
+let adjScript  = null;
+let crsScript  = null;
+let joinScript = null;
 
 // Python globals persisted between runPython() calls in the same interpreter
 // segs / ref_pts / boundary_pts / cy / cx  — kept alive after 'parse' call
@@ -18,17 +19,20 @@ async function _init() {
 
   // Fetch Python scripts relative to the repo root
   const base = self.location.href.replace(/\/workers\/[^/]+$/, '');
-  const [fRes, aRes, cRes] = await Promise.all([
+  const [fRes, aRes, cRes, jRes] = await Promise.all([
     fetch(`${base}/python/fit_cadastral.py`),
     fetch(`${base}/python/adjust_cadastral.py`),
     fetch(`${base}/python/crs_transform.py`),
+    fetch(`${base}/python/join_cadastral.py`),
   ]);
   if (!fRes.ok) throw new Error('Cannot fetch fit_cadastral.py');
   if (!aRes.ok) throw new Error('Cannot fetch adjust_cadastral.py');
   if (!cRes.ok) throw new Error('Cannot fetch crs_transform.py');
-  fitScript = await fRes.text();
-  adjScript = await aRes.text();
-  crsScript = await cRes.text();
+  if (!jRes.ok) throw new Error('Cannot fetch join_cadastral.py');
+  fitScript  = await fRes.text();
+  adjScript  = await aRes.text();
+  crsScript  = await cRes.text();
+  joinScript = await jRes.text();
 
   self.postMessage({ type: 'ready' });
 }
@@ -108,6 +112,37 @@ self.onmessage = async (e) => {
         // Pass source back so app.js knows which module to apply results to
         result.source = payload.source || 'fit';
         self.postMessage({ type: 'crs_result', payload: result });
+        break;
+      }
+
+      // ── JOIN: 接圖 — 解析多個分幅 COA/BNP/PAR 並合併 ─────────────────────
+      case 'join_parse': {
+        const sheets = payload.sheets || [];
+        sheets.forEach((s, i) => {
+          pyodide.globals.set(`sheet_${i}_coa`, new Uint8Array(s.coa));
+          pyodide.globals.set(`sheet_${i}_bnp`, new Uint8Array(s.bnp));
+          pyodide.globals.set(`sheet_${i}_par`, s.par ? new Uint8Array(s.par) : null);
+        });
+        pyodide.globals.set('sheet_ids_json', JSON.stringify(sheets.map(s => s.id)));
+        pyodide.globals.set('join_mode', 'parse');
+        pyodide.runPython(joinScript);
+        const result = JSON.parse(pyodide.globals.get('result_json'));
+        // Clean up per-sheet globals so they don't linger across repeated calls
+        sheets.forEach((s, i) => {
+          pyodide.globals.delete(`sheet_${i}_coa`);
+          pyodide.globals.delete(`sheet_${i}_bnp`);
+          pyodide.globals.delete(`sheet_${i}_par`);
+        });
+        self.postMessage({ type: 'join_parse_result', payload: result });
+        break;
+      }
+
+      // ── JOIN: 匯出合併後的 COA/BNP/PAR（沿用 join_parse 留下的 Python 全域）──
+      case 'join_export': {
+        pyodide.globals.set('join_mode', 'export');
+        pyodide.runPython(joinScript);
+        const result = JSON.parse(pyodide.globals.get('result_json'));
+        self.postMessage({ type: 'join_export_result', payload: result });
         break;
       }
 

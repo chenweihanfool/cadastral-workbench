@@ -70,9 +70,9 @@ canvas.panning { cursor: grabbing; }
 .section h3 { font-size: .82rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
 
 /* ── Drop zone ──────────────────────────────────────────────────────────── */
-#drop-zone, #adj-drop-zone { display: block; border: 1.5px dashed var(--border); border-radius: 8px; padding: 14px 10px; text-align: center; cursor: pointer; color: var(--muted); font-size: .9rem; transition: border-color .15s, color .15s; user-select: none; }
-#drop-zone:hover, #adj-drop-zone:hover, #drop-zone.over, #adj-drop-zone.over { border-color: var(--accent); color: var(--text); }
-#drop-zone .icon, #adj-drop-zone .icon { font-size: 1.6rem; margin-bottom: 4px; }
+#drop-zone, #adj-drop-zone, #join-drop-zone { display: block; border: 1.5px dashed var(--border); border-radius: 8px; padding: 14px 10px; text-align: center; cursor: pointer; color: var(--muted); font-size: .9rem; transition: border-color .15s, color .15s; user-select: none; }
+#drop-zone:hover, #adj-drop-zone:hover, #join-drop-zone:hover, #drop-zone.over, #adj-drop-zone.over, #join-drop-zone.over { border-color: var(--accent); color: var(--text); }
+#drop-zone .icon, #adj-drop-zone .icon, #join-drop-zone .icon { font-size: 1.6rem; margin-bottom: 4px; }
 
 /* ── File badges ─────────────────────────────────────────────────────────── */
 .file-badge { display: flex; align-items: center; gap: 6px; padding: 4px 0; font-size: .88rem; }
