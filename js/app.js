@@ -1498,24 +1498,70 @@ document.getElementById('btn-join-geojson').onclick = () => {
   showToast('GeoJSON 已下載');
 };
 
-document.getElementById('btn-join-kc').onclick = () => {
+// 輸出檔名沿用輸入分幅的原始 KC 基底檔名（例如 KC03360001/KC0336.COA → 基底 KC0336），
+// 而不是每個分幅資料夾自己的名稱，因為同一批分幅通常共用同一個基底檔名。
+function getJoinBaseName() {
+  for (const id of Object.keys(JOIN.sheets)) {
+    const f = JOIN.sheets[id].COA;
+    if (f) return f.name.replace(/\.[^.]+$/, '');
+  }
+  return 'JOINED';
+}
+
+document.getElementById('btn-join-kc').onclick = async () => {
   if (!JOIN.data) return;
+  // 目錄選取要在使用者點擊當下（同一個 user-gesture）就呼叫，晚一點在
+  // worker 回傳結果時才呼叫會因為使用者互動時效已過而被瀏覽器拒絕。
+  let dirHandle = null;
+  if (window.showDirectoryPicker) {
+    try {
+      dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    } catch (err) {
+      if (err.name === 'AbortError') return; // 使用者取消選取，不視為錯誤
+      showToast('無法開啟資料夾選取，將改用瀏覽器下載：' + err.message, true);
+    }
+  }
+  JOIN._exportDirHandle = dirHandle;
   setBtn('btn-join-kc', true, '產生中…');
   worker.postMessage({ type: 'join_export' });
 };
 
-function onJoinExportResult(result) {
+async function onJoinExportResult(result) {
   setBtn('btn-join-kc', false, '⬇ 匯出 COA/BNP/PAR');
   if (result.error) { showToast(result.error, true); return; }
 
-  const dl = (text, filename) => {
-    const blob = new Blob([new TextEncoder().encode(text)], { type: 'text/plain;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
-  };
-  dl(result.coa_text, 'JOINED.COA');
-  dl(result.bnp_text, 'JOINED.BNP');
-  dl(result.par_text, 'JOINED.PAR');
+  const baseName = getJoinBaseName();
+  const files = [
+    [`${baseName}.COA`, result.coa_text],
+    [`${baseName}.BNP`, result.bnp_text],
+    [`${baseName}.PAR`, result.par_text],
+  ];
+
+  let wroteToFolder = false;
+  if (JOIN._exportDirHandle) {
+    try {
+      const folderHandle = await JOIN._exportDirHandle.getDirectoryHandle(baseName, { create: true });
+      for (const [name, text] of files) {
+        const fileHandle = await folderHandle.getFileHandle(name, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(new TextEncoder().encode(text));
+        await writable.close();
+      }
+      wroteToFolder = true;
+      showToast(`已輸出到資料夾「${baseName}」（${result.stats.n_points} 點、${result.stats.n_parcels} 宗地）`);
+    } catch (err) {
+      showToast('寫入資料夾失敗，改用瀏覽器下載：' + err.message, true);
+    }
+  }
+
+  if (!wroteToFolder) {
+    for (const [name, text] of files) {
+      const blob = new Blob([new TextEncoder().encode(text)], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name; a.click();
+    }
+    showToast(`已下載 ${baseName}.COA / .BNP / .PAR（${result.stats.n_points} 點、${result.stats.n_parcels} 宗地）`);
+  }
 
   const noteEl = document.getElementById('join-renumber-note');
   if (result.renumbered && result.renumbered.length) {
@@ -1527,7 +1573,6 @@ function onJoinExportResult(result) {
   } else {
     noteEl.style.display = 'none';
   }
-  showToast(`已下載合併後 COA/BNP/PAR（${result.stats.n_points} 點、${result.stats.n_parcels} 宗地）`);
 }
 
 async function writeJoinGPKG(data) {
