@@ -1,8 +1,17 @@
 /* ── CadastralWorkbench — version manifest ───────────────────────────────── */
-window.CW_VERSION = '0.9.6';
-window.CW_BUILD   = '2026-08-13';
+window.CW_VERSION = '0.9.7';
+window.CW_BUILD   = '2026-09-07';
 
 window.CW_CHANGELOG = [
+  {
+    version: '0.9.7', date: '2026-09-07',
+    notes: [
+      '新增「接圖」模組：拖放包含多個分幅子資料夾的上層資料夾（每個子資料夾各含一組 COA/BNP/PAR），解析並合併成單一連續地籍圖層',
+      '合併結果依分幅上色顯示於畫布，並偵測不同分幅間相距 0.5 m 內的界址點，列出可能的共邊座標微差品質報告',
+      '可匯出含段/小段/登記面積/圖解面積屬性的 GeoPackage，或 GeoJSON',
+      '可匯出合併後的 COA/BNP/PAR（沿用輸入分幅的原始 KC 基底檔名），支援直接選取資料夾寫入；跨分幅（段,小段）撞號時自動錯開編號並列出調整清單',
+    ],
+  },
   {
     version: '0.9.6', date: '2026-08-13',
     notes: [
